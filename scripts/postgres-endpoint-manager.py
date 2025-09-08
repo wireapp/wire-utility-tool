@@ -112,6 +112,49 @@ class PostgreSQLEndpointManager:
         # Kubernetes configuration - handle both K8s and local testing
         self.is_k8s_environment = self.check_k8s_environment()
 
+        # Determine namespace (env > in-cluster serviceaccount file > default)
+        ns = os.environ.get('NAMESPACE')
+        if not ns:
+            try:
+                sa_ns = '/var/run/secrets/kubernetes.io/serviceaccount/namespace'
+                if os.path.exists(sa_ns):
+                    with open(sa_ns, 'r') as f:
+                        ns = f.read().strip()
+            except Exception:
+                ns = None
+        self.namespace = ns or os.environ.get('DEFAULT_NAMESPACE', 'default')
+
+        # Initialize k8s client if available and in k8s
+        self.k8s_v1 = None
+        if self.is_k8s_environment and KUBERNETES_CLIENT_AVAILABLE:
+            try:
+                config.load_incluster_config()
+                self.k8s_v1 = client.CoreV1Api()
+                self.log_info("Kubernetes client initialized", {"namespace": self.namespace})
+            except Exception as e:
+                self.k8s_v1 = None
+                self.log_warning("Failed to initialize kubernetes client; continuing without it", {"error": str(e)})
+
+        # Discover RW/RO service names from endpoints (prefer annotation)
+        self.rw_service = None
+        self.ro_service = None
+        if self.k8s_v1:
+            try:
+                rw, ro = self.discover_services_from_endpoints()
+                if rw:
+                    self.rw_service = rw
+                if ro:
+                    self.ro_service = ro
+            except Exception as e:
+                self.log_warning("Service discovery failed", {"error": str(e)})
+
+        # Fallback to environment or chart-derived defaults
+        chart_name = os.environ.get('CHART_NAME', os.environ.get('HELM_RELEASE', 'postgres'))
+        if not self.rw_service:
+            self.rw_service = os.environ.get('RW_SERVICE', f"{chart_name}-rw")
+        if not self.ro_service:
+            self.ro_service = os.environ.get('RO_SERVICE', f"{chart_name}-ro")
+
 
     def wrap_extra_fields_in_context(self, record: logging.LogRecord, extra_fields: Optional[Any]) -> None:
         """Wrap context with additional information"""
@@ -173,9 +216,45 @@ class PostgreSQLEndpointManager:
                     node_name = f"pg-{ip.replace('.', '-') }"
                     nodes.append((ip, node_name))
 
+        # If PG_NODES not provided, try to read stored topology from the RW endpoint annotation
         if not nodes:
-            self.log_error("No PostgreSQL nodes found in PG_NODES environment variable")
-            raise EndpointManagerError("No PostgreSQL nodes configured via PG_NODES")
+            try:
+                stored = None
+                # Only attempt if we have k8s client initialized
+                if self.k8s_v1:
+                    stored = self.get_stored_topology()
+
+                if stored:
+                    # expected format: primary:IP;standbys:IP,IP
+                    primary_ip = None
+                    standby_ips: List[str] = []
+                    for part in [p.strip() for p in stored.split(';') if p.strip()]:
+                        if part.startswith('primary:'):
+                            primary_ip = part.split(':', 1)[1].strip() or None
+                        elif part.startswith('standbys:'):
+                            s = part.split(':', 1)[1].strip()
+                            if s:
+                                standby_ips = [ip.strip() for ip in s.split(',') if ip.strip()]
+
+                    if primary_ip:
+                        nodes.append((primary_ip, f"pg-{primary_ip.replace('.', '-') }"))
+                    for ip in standby_ips:
+                        nodes.append((ip, f"pg-{ip.replace('.', '-') }"))
+
+                    if nodes:
+                        self.log_info("Nodes discovered from stored topology annotation", {
+                            "stored_topology": stored,
+                            "total_nodes": len(nodes),
+                            "nodes": [{"ip": ip, "name": name} for ip, name in nodes]
+                        })
+
+            except Exception as e:
+                # discovery failed — will fall through to original error
+                self.log_warning("Failed to parse stored topology for nodes", {"error": str(e)})
+
+        if not nodes:
+            self.log_error("No PostgreSQL nodes found in PG_NODES environment variable or endpoint annotation")
+            raise EndpointManagerError("No PostgreSQL nodes configured via PG_NODES or stored topology")
 
         self.log_info("Nodes discovered from environment variables", {
             "pg_nodes": pg_nodes,
@@ -237,6 +316,50 @@ class PostgreSQLEndpointManager:
                 "method": "kubernetes_client"
             })
             return None
+
+    def discover_services_from_endpoints(self) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Discover RW/RO endpoint names by scanning Endpoints in the namespace.
+        Prefer the endpoint that contains the postgres.discovery/last-topology annotation as RW.
+        """
+        if not self.k8s_v1:
+            return None, None
+
+        try:
+            resp = self.k8s_v1.list_namespaced_endpoints(namespace=self.namespace)
+            rw_name = None
+            ro_name = None
+
+            # Find endpoint carrying the topology annotation -> treat as RW
+            for ep in resp.items:
+                name = getattr(ep.metadata, 'name', None)
+                if not name:
+                    continue
+                annotations = getattr(ep.metadata, 'annotations', {}) or {}
+                if annotations.get('postgres.discovery/last-topology'):
+                    rw_name = name
+                    break
+
+            # If RW found, pick a different endpoint as RO (first non-RW)
+            if rw_name:
+                for ep in resp.items:
+                    name = getattr(ep.metadata, 'name', None)
+                    if name and name != rw_name:
+                        ro_name = name
+                        break
+            else:
+                # Fallback: take first two endpoint names if present
+                names = [getattr(i.metadata, 'name', None) for i in resp.items if getattr(i.metadata, 'name', None)]
+                if names:
+                    rw_name = names[0]
+                    if len(names) > 1:
+                        ro_name = names[1]
+
+            return rw_name, ro_name
+
+        except Exception as e:
+            self.log_warning("Failed to discover services from endpoints", {"error": str(e)})
+            return None, None
 
     def setup_environment(self):
         """Setup PostgreSQL environment variables"""
@@ -627,11 +750,20 @@ if __name__ == "__main__":
         if not os.path.exists(test_script):
             print(f"Test script not found: {test_script}", file=sys.stderr)
             sys.exit(2)
+        # When delegating to the test script, ensure it sees only its own argv.
+        # `args, unknown = parser.parse_known_args()` above collected any unknown args; pass them through.
+        test_argv = [test_script] + unknown
+        old_argv = sys.argv
         try:
+            sys.argv = test_argv
             runpy.run_path(test_script, run_name="__main__")
-            sys.exit(0)
         except SystemExit as e:
-            sys.exit(e.code if isinstance(e.code, int) else 1)
+            code = e.code if isinstance(e.code, int) else 1
+            sys.exit(code)
+        finally:
+            sys.argv = old_argv
+        # If test script returns normally, exit success
+        sys.exit(0)
 
     try:
         manager = PostgreSQLEndpointManager()
