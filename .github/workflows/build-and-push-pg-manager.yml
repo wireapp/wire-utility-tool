@@ -19,6 +19,8 @@ on:
       - 'scripts/postgres-endpoint-manager.py'
       - 'scripts/test-postgres-endpoint-manager.py'
       - '.github/workflows/build-and-push-pg-manager.yml'
+  issue_comment:
+    types: [created]
 
 env:
   REGISTRY: quay.io
@@ -91,7 +93,10 @@ jobs:
             test-image:latest /app/scripts/test-postgres-endpoint-manager.py --comprehensive
 
       - name: Build and push multi-platform image
-        if: github.event_name != 'pull_request'
+        if: >-
+          github.event_name != 'pull_request' && (
+            github.event_name != 'issue_comment' || contains(github.event.comment.body, '[build image]')
+          )
         uses: docker/build-push-action@v5
         with:
           context: .
