@@ -112,6 +112,17 @@ class PostgreSQLEndpointManager:
         # Kubernetes configuration - handle both K8s and local testing
         self.is_k8s_environment = self.check_k8s_environment()
 
+        # Enforce psycopg availability - no subprocess/psql fallback allowed
+        if not PSYCOPG_AVAILABLE:
+            # Use log directly (logger available) to ensure message is visible even before other init
+            logger.error(json.dumps({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "level": "ERROR",
+                "message": "psycopg (v3) is required but not available in this environment",
+                "advice": "Install psycopg[binary] or include it in the runtime image"
+            }))
+            raise EndpointManagerError("psycopg is required")
+
         # Determine namespace (env > in-cluster serviceaccount file > default)
         ns = os.environ.get('NAMESPACE')
         if not ns:
@@ -412,37 +423,65 @@ class PostgreSQLEndpointManager:
 
         # Use psycopg (v3) if available for reliable role detection
         recovery_val = None
+        # At this point psycopg is required (we raise in __init__ if missing). Build connection args
+        user = os.environ.get('PGUSER', 'repmgr')
+        password = os.environ.get('PGPASSWORD', 'securepassword')
+        database = os.environ.get('PGDATABASE', 'repmgr')
+        port = int(os.environ.get('PGPORT', '5432')) if os.environ.get('PGPORT') else 5432
 
-        if PSYCOPG_AVAILABLE:
-            user = os.environ.get('PGUSER', 'repmgr')
-            password = os.environ.get('PGPASSWORD', '')
-            database = os.environ.get('PGDATABASE', 'repmgr')
+        # Log driver info and intended connection args (never log password)
+        try:
+            driver_version = getattr(psycopg, '__version__', 'unknown')
+        except Exception:
+            driver_version = 'unknown'
+        self.log_info("Attempting DB driver connect", {
+            "driver": "psycopg",
+            "driver_version": driver_version,
+            "connect_host": ip,
+            "connect_port": port,
+            "connect_user": user,
+            "connect_db": database,
+            "connect_timeout": self.connection_timeout
+        })
 
-            @retry_with_backoff
-            def query_recovery():
-                conn = psycopg.connect(host=ip, user=user, password=password, dbname=database, connect_timeout=self.connection_timeout)
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute('SELECT pg_is_in_recovery();')
-                        row = cur.fetchone()
-                    return row[0] if row is not None else None
-                finally:
-                    conn.close()
+        @retry_with_backoff
+        def query_recovery():
+            conn_kwargs = {
+                "host": ip,
+                "port": port,
+                "user": user,
+                "password": password,
+                "dbname": database,
+                "connect_timeout": self.connection_timeout
+            }
+            sslmode = os.environ.get("PGSSLMODE")
+            if sslmode:
+                conn_kwargs["sslmode"] = sslmode
 
+            conn = psycopg.connect(**conn_kwargs)
             try:
-                recovery_val = query_recovery()
-            except Exception as e:
-                self.log_warning("DB role check failed", {"node_name": name, "node_ip": ip, "error": str(e)})
-                return None
+                with conn.cursor() as cur:
+                    cur.execute('SELECT pg_is_in_recovery();')
+                    row = cur.fetchone()
+                return row[0] if row is not None else None
+            finally:
+                conn.close()
 
-        else:
-            # Fallback: use psql subprocess if available in the image (should be rare)
-            recovery_cmd = ["psql", "-h", ip, "-t", "-A", "-c", "SELECT pg_is_in_recovery();", "--set", "ON_ERROR_STOP=1"]
-            success, stdout, stderr = self.run_command(recovery_cmd, timeout=self.connection_timeout)
-            if not success:
-                self.log_warning("Node status unknown (psql fallback)", {"node_name": name, "node_ip": ip, "error": stderr})
-                return None
-            recovery_val = stdout.strip()
+        try:
+            recovery_val = query_recovery()
+        except Exception as e:
+            # Provide richer diagnostics to help debug driver connection issues
+            self.log_warning("DB role check failed (driver)", {
+                "node_name": name,
+                "node_ip": ip,
+                "error": str(e),
+                "error_repr": repr(e),
+                "error_type": type(e).__name__
+            })
+            # If ssl mode is set, log it explicitly for troubleshooting
+            if os.environ.get("PGSSLMODE"):
+                self.log_info("PGSSLMODE is set", {"PGSSLMODE": os.environ.get("PGSSLMODE")})
+            return None
 
         # Normalize result to boolean
         is_in_recovery = None
