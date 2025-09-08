@@ -21,6 +21,8 @@ on:
       - '.github/workflows/build-and-push-pg-manager.yml'
   issue_comment:
     types: [created]
+  pull_request_review_comment:
+    types: [created]
 
 env:
   REGISTRY: quay.io
@@ -37,6 +39,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Debug comment event payload
+        if: ${{ github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment' }}
+        run: |
+          echo "--- GITHUB EVENT ---"
+          echo "event_name=${{ github.event_name }}"
+          echo "actor=${{ github.actor }}"
+          echo "--- RAW EVENT (JSON) ---"
+          echo '${{ toJSON(github.event) }}'
+          echo "--- comment.body (if present) ---"
+          echo "${{ github.event.comment && github.event.comment.body || '' }}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
