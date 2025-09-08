@@ -146,25 +146,31 @@ class PostgreSQLEndpointManager:
                 self.k8s_v1 = None
                 self.log_warning("Failed to initialize kubernetes client; continuing without it", {"error": str(e)})
 
-        # Discover RW/RO service names from endpoints (prefer annotation)
-        self.rw_service = None
-        self.ro_service = None
+        # Fallback to environment or chart-derived defaults (set early so we don't
+        # need to perform a cluster-wide list of Endpoints which requires broader RBAC)
+        chart_name = os.environ.get('CHART_NAME', os.environ.get('HELM_RELEASE', 'postgres-external'))
+        self.rw_service = os.environ.get('RW_SERVICE', f"{chart_name}-rw")
+        self.ro_service = os.environ.get('RO_SERVICE', f"{chart_name}-ro")
+
+        # If running in-cluster, attempt to validate access to the named endpoints
+        # via read_namespaced_endpoints (requires only 'get' on those specific
+        # resourceNames). This avoids calling list_namespaced_endpoints which would
+        # require broader permissions.
         if self.k8s_v1:
             try:
-                rw, ro = self.discover_services_from_endpoints()
-                if rw:
-                    self.rw_service = rw
-                if ro:
-                    self.ro_service = ro
+                try:
+                    _ = self.k8s_v1.read_namespaced_endpoints(name=self.rw_service, namespace=self.namespace)
+                    self.log_info("RW endpoint accessible", {"service": self.rw_service})
+                except client.exceptions.ApiException as e:
+                    # Log warning but continue; RBAC may restrict access to endpoint metadata
+                    self.log_warning("RW endpoint not accessible", {"service": self.rw_service, "status": getattr(e, 'status', None)})
+                try:
+                    _ = self.k8s_v1.read_namespaced_endpoints(name=self.ro_service, namespace=self.namespace)
+                    self.log_info("RO endpoint accessible", {"service": self.ro_service})
+                except client.exceptions.ApiException as e:
+                    self.log_warning("RO endpoint not accessible", {"service": self.ro_service, "status": getattr(e, 'status', None)})
             except Exception as e:
-                self.log_warning("Service discovery failed", {"error": str(e)})
-
-        # Fallback to environment or chart-derived defaults
-        chart_name = os.environ.get('CHART_NAME', os.environ.get('HELM_RELEASE', 'postgres'))
-        if not self.rw_service:
-            self.rw_service = os.environ.get('RW_SERVICE', f"{chart_name}-rw")
-        if not self.ro_service:
-            self.ro_service = os.environ.get('RO_SERVICE', f"{chart_name}-ro")
+                self.log_warning("Endpoint validation failed", {"error": str(e)})
 
 
     def wrap_extra_fields_in_context(self, record: logging.LogRecord, extra_fields: Optional[Any]) -> None:
