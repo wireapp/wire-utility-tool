@@ -89,8 +89,9 @@ push-pg-manager-multi:
 # Test postgres-endpoint-manager image
 test-pg-manager:
 	@echo "Testing postgres-endpoint-manager image (runtime) and functionality via test image..."
-	# Check minimal runtime image (no psql expected)
-	docker run --rm --entrypoint sh $(PG_MANAGER_IMAGE):$(TAG) -c "python --version && echo 'psql:' $(which psql 2>/dev/null || echo 'absent') && curl --version >/dev/null 2>&1 || true || true"
+	# Check minimal runtime image (no psql expected) and verify psycopg import/version
+	# Single-line defensive import to avoid shell quoting/newline issues in Makefile
+	docker run --rm --entrypoint sh $(PG_MANAGER_IMAGE):$(TAG) -c "python --version && (python -c 'import psycopg; print(\"psycopg: present, version=\", getattr(psycopg, \"__version__\", \"unknown\")); print(\"psycopg file:\", getattr(psycopg, \"__file__\", None))' || echo 'psycopg import failed') && echo 'psql:' $(which psql 2>/dev/null || echo 'absent') && curl --version >/dev/null 2>&1 || true || true"
 	@echo "Running functional tests using the fuller test image (includes psql)..."
 	# Build or ensure the test image exists and run the comprehensive test harness from it
 	$(MAKE) build-pg-manager-test

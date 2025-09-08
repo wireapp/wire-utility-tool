@@ -22,8 +22,19 @@ from unittest.mock import Mock, patch
 # Import the main endpoint manager class
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
+    # Ensure a psycopg stub exists before loading the module so the module-level
+    # import in postgres-endpoint-manager.py sees it and sets PSYCOPG_AVAILABLE.
+    import importlib.util, types
+    if 'psycopg' not in sys.modules:
+        stub = types.ModuleType('psycopg')
+        setattr(stub, '__version__', 'test')
+        # minimal connect stub to avoid attribute errors if accidentally called
+        def _stub_connect(*a, **k):
+            raise RuntimeError('psycopg.connect should not be called in unit tests')
+        setattr(stub, 'connect', _stub_connect)
+        sys.modules['psycopg'] = stub
+
     # Import from the main script file
-    import importlib.util
     spec = importlib.util.spec_from_file_location("postgres_endpoint_manager",
                                                  os.path.join(os.path.dirname(__file__), "postgres-endpoint-manager.py"))
     postgres_module = importlib.util.module_from_spec(spec)
@@ -35,18 +46,6 @@ except Exception as e:
     print(f"Error importing PostgreSQL endpoint manager: {e}")
     print("Make sure postgres-endpoint-manager.py is in the same directory.")
     sys.exit(1)
-
-# Tests run in environments that may not have psycopg installed; the manager
-# now requires psycopg at init time. For unit tests we inject a safe stub so
-# the constructor doesn't raise and tests can mock node checks.
-import types
-if not getattr(postgres_module, 'PSYCOPG_AVAILABLE', False):
-    postgres_module.PSYCOPG_AVAILABLE = True
-    if 'psycopg' not in sys.modules:
-        # minimal stub with __version__ attribute; tests mock DB calls anyway
-        postgres_module.psycopg = types.SimpleNamespace(__version__='test')
-    else:
-        postgres_module.psycopg = sys.modules['psycopg']
 
 # Initialize logger for testing
 test_logger = setup_logging()

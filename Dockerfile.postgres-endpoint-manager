@@ -1,5 +1,5 @@
 ## Builder stage: install build deps and Python packages
-FROM python:3.11-slim as builder
+FROM python:3.9-slim as builder
 
 # Install build-time tools and the test-only client (postgresql-client) here so the
 # final runtime image can be minimal. We'll trim installed site-packages in the
@@ -16,8 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /tmp
 COPY requirements.txt .
 RUN python -m pip install --upgrade pip setuptools wheel
-# Install into a private prefix so we can copy only the runtime artifacts later
-RUN python -m pip install --prefix=/install --no-deps --upgrade -r requirements.txt
+# Install into a private prefix so we can copy only the site-packages into the
+# final image and avoid overwriting the distroless Python runtime binary.
+RUN python -m pip install --prefix=/install --upgrade -r requirements.txt
 
 # Trim common unnecessary files from the installed packages to reduce final size
 RUN find /install -type d -name 'tests' -exec rm -rf {} + || true
@@ -25,11 +26,22 @@ RUN find /install -type d -name '__pycache__' -exec rm -rf {} + || true
 RUN find /install -name '*.pyc' -delete || true
 RUN rm -rf /install/pip* /install/*.dist-info/*-info || true
 
+# Collect runtime libs (libpq, libssl, libcrypto) into a known location so we
+# can copy them reliably into the final distroless image. Use ldconfig to find
+# the actual installed filenames.
+RUN mkdir -p /install/_runtime_libs && \
+        for lib in libpq libssl libcrypto; do \
+            for f in $(ldconfig -p | awk '/"$lib"/ {print $NF}' | sort -u 2>/dev/null); do \
+                cp -L "$f" /install/_runtime_libs/ || true; \
+            done || true; \
+        done || true
+
 ## Final stage: minimal runtime using Distroless Python (Debian-based)
 FROM gcr.io/distroless/python3-debian11:nonroot
 
-# Copy installed Python runtime artifacts from the builder
-COPY --from=builder /install /usr/local
+# Copy installed Python site-packages from the builder (we installed into /install)
+# Do not copy the builder's Python binary to avoid architecture/glibc mismatches.
+COPY --from=builder /install /install
 
 # Copy the scripts (they live in /usr/local/bin to match the previous layout)
 # Copy directly from the build context so the builder doesn't need to stage them.
@@ -38,5 +50,22 @@ COPY scripts/postgres-endpoint-manager.py /usr/local/bin/postgres-endpoint-manag
 # Make sure the script is executable (distroless has no shell; file modes are preserved from COPY)
 RUN --mount=type=cache,target=/tmp/true true || true
 
+# Copy runtime libraries required by psycopg (libpq and common SSL libs)
+# These are installed in the builder (libpq-dev) and must be available to
+# the psycopg binary in the final distroless image.
+## Copy collected runtime libs into /lib in the final image so dynamic linker
+## can find them for psycopg's binary extension.
+COPY --from=builder /install/_runtime_libs /lib/
+
+# Copy only the installed site-packages into the final image's Python site-packages
+# path. Use the expected Python version directory from the builder (3.9).
+# The distroless final image doesn't provide shell utilities, so avoid RUN; COPY
+# will create the target directories when copying the files.
+COPY --from=builder /install/lib/python3.9/site-packages/ /usr/local/lib/python3.9/site-packages/
+
+# Ensure Python will search the builder-installed site-packages at runtime.
+# This is low-risk: it points Python at the private /install prefix where pip
+# placed packages during the builder stage, and also includes /usr/local.
+ENV PYTHONPATH=/install/lib/python3.9/site-packages:/usr/local/lib/python3.9/site-packages:$PYTHONPATH
 # Entrypoint: run the runtime manager by default
 ENTRYPOINT ["python", "/usr/local/bin/postgres-endpoint-manager.py"]
