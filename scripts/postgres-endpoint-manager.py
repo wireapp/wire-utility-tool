@@ -153,9 +153,7 @@ class PostgreSQLEndpointManager:
         self.ro_service = os.environ.get('RO_SERVICE', f"{chart_name}-ro")
 
         # If running in-cluster, attempt to validate access to the named endpoints
-        # via read_namespaced_endpoints (requires only 'get' on those specific
-        # resourceNames). This avoids calling list_namespaced_endpoints which would
-        # require broader permissions.
+        # via read_namespaced_endpoints (requires only 'get' on those specific resourceNames).
         if self.k8s_v1:
             try:
                 try:
@@ -435,7 +433,7 @@ class PostgreSQLEndpointManager:
         database = os.environ.get('PGDATABASE', 'repmgr')
         port = int(os.environ.get('PGPORT', '5432')) if os.environ.get('PGPORT') else 5432
 
-        # Log driver info and intended connection args (never log password)
+        # Log driver info and intended connection args
         try:
             driver_version = getattr(psycopg, '__version__', 'unknown')
         except Exception:
@@ -476,7 +474,6 @@ class PostgreSQLEndpointManager:
         try:
             recovery_val = query_recovery()
         except Exception as e:
-            # Provide richer diagnostics to help debug driver connection issues
             self.log_warning("DB role check failed (driver)", {
                 "node_name": name,
                 "node_ip": ip,
@@ -484,12 +481,10 @@ class PostgreSQLEndpointManager:
                 "error_repr": repr(e),
                 "error_type": type(e).__name__
             })
-            # If ssl mode is set, log it explicitly for troubleshooting
             if os.environ.get("PGSSLMODE"):
                 self.log_info("PGSSLMODE is set", {"PGSSLMODE": os.environ.get("PGSSLMODE")})
             return None
 
-        # Normalize result to boolean
         is_in_recovery = None
         if isinstance(recovery_val, bool):
             is_in_recovery = recovery_val
