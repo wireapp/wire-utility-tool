@@ -36,6 +36,18 @@ except Exception as e:
     print("Make sure postgres-endpoint-manager.py is in the same directory.")
     sys.exit(1)
 
+# Tests run in environments that may not have psycopg installed; the manager
+# now requires psycopg at init time. For unit tests we inject a safe stub so
+# the constructor doesn't raise and tests can mock node checks.
+import types
+if not getattr(postgres_module, 'PSYCOPG_AVAILABLE', False):
+    postgres_module.PSYCOPG_AVAILABLE = True
+    if 'psycopg' not in sys.modules:
+        # minimal stub with __version__ attribute; tests mock DB calls anyway
+        postgres_module.psycopg = types.SimpleNamespace(__version__='test')
+    else:
+        postgres_module.psycopg = sys.modules['psycopg']
+
 # Initialize logger for testing
 test_logger = setup_logging()
 
