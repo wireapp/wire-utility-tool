@@ -103,15 +103,21 @@ class PostgreSQLEndpointManager:
             return None
 
         try:
+            # Log planned (non-secret) connection parameters for debugging
+            logger.info('Attempting DB driver connect', {
+                'connect_host': ip,
+                'connect_port': int(port),
+                'connect_timeout': getattr(cfg, 'pg_connect_timeout', None)
+            })
+
             # Pass configured DB credentials and connection options through to the checker
             res = self._orch.checker.is_in_recovery(
-                host=ip,
-                port=int(port),
-                user=getattr(cfg, 'pg_user', None),
-                password=getattr(cfg, 'pg_password', None),
-                dbname=getattr(cfg, 'pg_database', None),
-                connect_timeout=getattr(cfg, 'db_connect_timeout', None) or getattr(cfg, 'connect_timeout', None) or 5,
-                sslmode=getattr(cfg, 'pg_sslmode', None)
+                ip,
+                int(port),
+                getattr(cfg, 'pg_user', None),
+                getattr(cfg, 'pg_password', None),
+                getattr(cfg, 'pg_database', None),
+                getattr(cfg, 'pg_sslmode', None)
             )
         except Exception:
             # Checker had an error; return unknown so verification can continue with other nodes

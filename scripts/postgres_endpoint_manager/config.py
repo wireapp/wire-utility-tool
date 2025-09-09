@@ -12,6 +12,9 @@ class Config:
     pg_password: str
     pg_database: str
     pg_connect_timeout: int
+    pg_port: int
+    pg_sslmode: str
+    tcp_connect_timeout: float
     max_workers: int
 
 
@@ -26,6 +29,10 @@ def load_from_env() -> Config:
         pg_user=os.environ.get('PGUSER', 'repmgr'),
         pg_password=os.environ.get('PGPASSWORD', 'securepassword'),
         pg_database=os.environ.get('PGDATABASE', 'repmgr'),
-        pg_connect_timeout=int(os.environ.get('PGCONNECT_TIMEOUT', '5')),
+    pg_connect_timeout=int(os.environ.get('PGCONNECT_TIMEOUT', '5')),
+    # Optional additional settings used by the package
+    pg_port=int(os.environ.get('PGPORT', os.environ.get('PG_PORT', '5432'))),
+    pg_sslmode=os.environ.get('PGSSLMODE', ''),
+    tcp_connect_timeout=float(os.environ.get('TCP_CONNECT_TIMEOUT', '1.0')),
         max_workers=int(os.environ.get('MAX_WORKERS', '3')),
     )

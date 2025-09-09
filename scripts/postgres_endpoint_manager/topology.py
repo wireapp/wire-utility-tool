@@ -10,9 +10,10 @@ class Topology:
 
 
 class TopologyVerifier:
-    def __init__(self, checker, max_workers: int = 3):
+    def __init__(self, checker, max_workers: int = 3, cfg=None):
         self.checker = checker
         self.max_workers = max_workers
+        self.cfg = cfg
 
     def verify(self, nodes: List[Tuple[str, str]]) -> Topology:
         primary_ip = None
@@ -20,14 +21,23 @@ class TopologyVerifier:
         standby_ips: List[str] = []
         primary_ips_found: List[str] = []
 
+        # Use configured DB credentials (if available) when calling the checker so
+        # authentication and sslmode behave like the monolith.
+        user = getattr(self.cfg, 'pg_user', None) if self.cfg is not None else None
+        password = getattr(self.cfg, 'pg_password', None) if self.cfg is not None else None
+        dbname = getattr(self.cfg, 'pg_database', None) if self.cfg is not None else None
+        sslmode = getattr(self.cfg, 'pg_sslmode', None) if self.cfg is not None else None
+
+        timeout = (getattr(self.cfg, 'pg_connect_timeout', None) or 5) + 5
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_node = {executor.submit(self.checker.is_in_recovery, ip, 5432, None, None, None): (ip, name) for ip, name in nodes}
+            future_to_node = {executor.submit(self.checker.is_in_recovery, ip, 5432, user, password, dbname, sslmode): (ip, name) for ip, name in nodes}
             for future in as_completed(future_to_node):
                 ip, name = future_to_node[future]
                 try:
-                    res = future.result()
+                    res = future.result(timeout=timeout)
                 except Exception:
                     # treat as unreachable/unknown
+                    # optional: log timeout/exception at higher level
                     continue
                 if res is True:
                     # in recovery -> standby

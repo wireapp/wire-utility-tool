@@ -7,7 +7,16 @@ class PostgresChecker:
     """Encapsulate psycopg checks. psycopg_module may be injected for tests."""
     def __init__(self, connect_timeout: int = 5, psycopg_module=None):
         self.connect_timeout = connect_timeout
-        self.psycopg = psycopg_module
+        # Allow optional injection for tests; if not provided, try to import psycopg
+        if psycopg_module is not None:
+            self.psycopg = psycopg_module
+        else:
+            try:
+                import psycopg
+                self.psycopg = psycopg
+            except Exception:
+                # leave as None; callers will get EndpointManagerError when used
+                self.psycopg = None
 
     @retry_with_backoff()
     def is_in_recovery(self, host: str, port: int, user: str, password: str, dbname: str, sslmode: Optional[str] = None) -> Optional[bool]:

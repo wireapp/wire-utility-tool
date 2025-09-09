@@ -14,6 +14,10 @@ class Orchestrator:
         self.kube = kube or KubeClient(self.cfg.namespace)
         self.checker = checker or PostgresChecker(connect_timeout=self.cfg.pg_connect_timeout)
         self.updater = updater or EndpointUpdater(self.kube)
+        # Fail fast if psycopg is not available in the runtime image
+        if not getattr(self.checker, 'psycopg', None):
+            self.logger.error('psycopg (PostgreSQL driver) not available in runtime image')
+            raise Exception('psycopg is required in the runtime image')
 
     def run(self) -> bool:
         # 1. discover nodes from env or stored annotation
@@ -45,7 +49,7 @@ class Orchestrator:
             return False
 
         # 2. verify topology
-        verifier = TopologyVerifier(self.checker, max_workers=self.cfg.max_workers)
+        verifier = TopologyVerifier(self.checker, max_workers=self.cfg.max_workers, cfg=self.cfg)
         topology = verifier.verify(nodes)
         if not topology.primary_ip:
             self.logger.error('No primary found during verification')
