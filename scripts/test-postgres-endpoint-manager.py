@@ -19,8 +19,11 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 from unittest.mock import Mock, patch
 
-# Import the main endpoint manager class
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Ensure repository root (parent of scripts/) is on sys.path so
+# `import scripts.postgres_endpoint_manager` works when tests mount
+# the host `scripts/` directory to `/app/scripts` in the container.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 try:
     # Ensure a psycopg stub exists before loading the module so the module-level
     # import in postgres-endpoint-manager.py sees it and sets PSYCOPG_AVAILABLE.
@@ -34,14 +37,8 @@ try:
         setattr(stub, 'connect', _stub_connect)
         sys.modules['psycopg'] = stub
 
-    # Import from the main script file
-    spec = importlib.util.spec_from_file_location("postgres_endpoint_manager",
-                                                 os.path.join(os.path.dirname(__file__), "postgres-endpoint-manager.py"))
-    postgres_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(postgres_module)
-    PostgreSQLEndpointManager = postgres_module.PostgreSQLEndpointManager
-    StructuredFormatter = postgres_module.StructuredFormatter
-    setup_logging = postgres_module.setup_logging
+    # Import compatibility symbols from the package module
+    from scripts.postgres_endpoint_manager import PostgreSQLEndpointManager, StructuredFormatter, setup_logging
 except Exception as e:
     print(f"Error importing PostgreSQL endpoint manager: {e}")
     print("Make sure postgres-endpoint-manager.py is in the same directory.")

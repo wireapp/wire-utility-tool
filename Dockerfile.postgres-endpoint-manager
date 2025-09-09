@@ -43,12 +43,10 @@ FROM gcr.io/distroless/python3-debian11:nonroot
 # Do not copy the builder's Python binary to avoid architecture/glibc mismatches.
 COPY --from=builder /install /install
 
-# Copy the scripts (they live in /usr/local/bin to match the previous layout)
-# Copy directly from the build context so the builder doesn't need to stage them.
-COPY scripts/postgres-endpoint-manager.py /usr/local/bin/postgres-endpoint-manager.py
-
-# Make sure the script is executable (distroless has no shell; file modes are preserved from COPY)
-RUN --mount=type=cache,target=/tmp/true true || true
+# Copy only the package source so the package CLI can be executed directly.
+# Copy only the `scripts/postgres_endpoint_manager` package to /app/scripts
+# to minimize the final image size and avoid copying unrelated scripts.
+COPY scripts/postgres_endpoint_manager /app/scripts/postgres_endpoint_manager
 
 # Copy runtime libraries required by psycopg (libpq and common SSL libs)
 # These are installed in the builder (libpq-dev) and must be available to
@@ -66,6 +64,7 @@ COPY --from=builder /install/lib/python3.9/site-packages/ /usr/local/lib/python3
 # Ensure Python will search the builder-installed site-packages at runtime.
 # This is low-risk: it points Python at the private /install prefix where pip
 # placed packages during the builder stage, and also includes /usr/local.
-ENV PYTHONPATH=/install/lib/python3.9/site-packages:/usr/local/lib/python3.9/site-packages:$PYTHONPATH
-# Entrypoint: run the runtime manager by default
-ENTRYPOINT ["python", "/usr/local/bin/postgres-endpoint-manager.py"]
+ENV PYTHONPATH=/install/lib/python3.9/site-packages:/usr/local/lib/python3.9/site-packages:/app:$PYTHONPATH
+
+# Entrypoint: run the package CLI module directly
+ENTRYPOINT ["python", "-m", "scripts.postgres_endpoint_manager.cli"]
