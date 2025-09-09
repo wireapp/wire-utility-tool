@@ -88,13 +88,38 @@ class PostgreSQLEndpointManager:
         return self._orch.updater.update(service_name, target_ips, topology_signature)
 
     def check_postgres_node(self, ip: str, name: str):
+        import socket
+
+        cfg = getattr(self._orch, 'cfg', None)
+        port = getattr(cfg, 'pg_port', None) or 5432
+        tcp_timeout = getattr(cfg, 'tcp_connect_timeout', None) or 1.0
+
+        # Quick TCP pre-check to avoid long DB connect timeouts for unreachable hosts
         try:
-            res = self._orch.checker.is_in_recovery(ip, 5432, None, None, None)
+            with socket.create_connection((ip, int(port)), timeout=float(tcp_timeout)):
+                pass
         except Exception:
+            # Unreachable at TCP level, treat as unknown
             return None
-        if res is True:
+
+        try:
+            # Pass configured DB credentials and connection options through to the checker
+            res = self._orch.checker.is_in_recovery(
+                host=ip,
+                port=int(port),
+                user=getattr(cfg, 'pg_user', None),
+                password=getattr(cfg, 'pg_password', None),
+                dbname=getattr(cfg, 'pg_database', None),
+                connect_timeout=getattr(cfg, 'db_connect_timeout', None) or getattr(cfg, 'connect_timeout', None) or 5,
+                sslmode=getattr(cfg, 'pg_sslmode', None)
+            )
+        except Exception:
+            # Checker had an error; return unknown so verification can continue with other nodes
+            return None
+
+        if res is True or res == 'standby':
             return 'standby'
-        if res is False:
+        if res is False or res == 'primary':
             return 'primary'
         return None
 
