@@ -1,4 +1,4 @@
-from .logging_ import StructuredFormatter, get_logger
+from .logging_ import get_logger
 from .exceptions import EndpointManagerError
 from .utils import retry_with_backoff
 
@@ -65,24 +65,8 @@ class PostgreSQLEndpointManager:
             primary_name = None
 
         return {'primary_ip': primary_ip, 'standby_ips': sorted(standby_ips)}
-
-    def log_info(self, msg: str, extra: dict = None):
-        rec = self.__class__._make_log_record(self, 'INFO', msg, extra)
-        logger.handle(rec)
-
-    def log_error(self, msg: str, extra: dict = None):
-        rec = self.__class__._make_log_record(self, 'ERROR', msg, extra)
-        logger.handle(rec)
-
-    @staticmethod
-    def _make_log_record(self, level: str, msg: str, extra: dict = None):
-        import logging
-        record = logging.LogRecord(
-            name=logger.name, level=getattr(logging, level), pathname='', lineno=0,
-            msg=msg, args=(), exc_info=None
-        )
-        record.extra_fields = extra or {}
-        return record
+    # log_info / log_error compatibility wrappers removed; call-sites should
+    # use the module-level `logger` (returned by setup_logging) directly.
 
     def update_endpoint(self, service_name: str, target_ips, description: str, topology_signature: str) -> bool:
         return self._orch.updater.update(service_name, target_ips, topology_signature)

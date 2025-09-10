@@ -20,6 +20,12 @@ RUN python -m pip install --upgrade pip setuptools wheel
 # final image and avoid overwriting the distroless Python runtime binary.
 RUN python -m pip install --prefix=/install --upgrade -r requirements.txt
 
+# Ensure the builder image knows to load site-packages we installed into /install
+# This is important because we run the builder stage image (tagged as -test) to
+# execute the test harness; without PYTHONPATH the /install prefix isn't on
+# sys.path and imports (structlog, psycopg, etc.) fail at runtime.
+ENV PYTHONPATH=/install/lib/python3.9/site-packages:/usr/local/lib/python3.9/site-packages:/app:$PYTHONPATH
+
 # Trim common unnecessary files from the installed packages to reduce final size
 RUN find /install -type d -name 'tests' -exec rm -rf {} + || true
 RUN find /install -type d -name '__pycache__' -exec rm -rf {} + || true

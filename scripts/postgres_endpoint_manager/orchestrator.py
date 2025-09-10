@@ -63,9 +63,23 @@ class Orchestrator:
             stored_sig = None
 
         if stored_sig and stored_sig == signature:
-            self.logger.info('Topology unchanged; skipping updates')
+            # Emit diagnostic details so callers can understand why we skipped
+            self.logger.info(
+                'Topology unchanged; skipping updates',
+                computed_signature=signature,
+                stored_signature=stored_sig,
+                topology={'primary': topology.primary_ip, 'standbys': topology.standby_ips},
+            )
             return True
 
         rw_ok = self.updater.update(self.cfg.rw_service, [topology.primary_ip], signature)
         ro_ok = self.updater.update(self.cfg.ro_service, topology.standby_ips, signature)
+        if not (rw_ok and ro_ok):
+            self.logger.error(
+                'Failed to apply endpoint updates',
+                rw_update_ok=bool(rw_ok),
+                ro_update_ok=bool(ro_ok),
+                computed_signature=signature,
+                topology={'primary': topology.primary_ip, 'standbys': topology.standby_ips},
+            )
         return bool(rw_ok and ro_ok)

@@ -38,7 +38,7 @@ try:
         sys.modules['psycopg'] = stub
 
     # Import compatibility symbols from the package module
-    from scripts.postgres_endpoint_manager import PostgreSQLEndpointManager, StructuredFormatter, setup_logging
+    from scripts.postgres_endpoint_manager import PostgreSQLEndpointManager, setup_logging
 except Exception as e:
     print(f"Error importing PostgreSQL endpoint manager: {e}")
     print("Make sure postgres-endpoint-manager.py is in the same directory.")
@@ -132,7 +132,7 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
         if not hasattr(self, 'connection_timeout'):
             self.connection_timeout = 5
 
-        self.log_info("Test PostgreSQL Endpoint Manager initialized", {
+        test_logger.info("Test PostgreSQL Endpoint Manager initialized", **{
             "test_scenario": test_scenario,
             "current_scenario": self.current_scenario
         })
@@ -162,7 +162,7 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
 
     def check_postgres_node(self, ip: str, name: str) -> Optional[str]:
         """Mock PostgreSQL node checking based on test scenario"""
-        self.log_info("Checking PostgreSQL node (mocked)", {
+        test_logger.info("Checking PostgreSQL node (mocked)", **{
             "node_name": name,
             "node_ip": ip,
             "test_mode": True,
@@ -173,7 +173,7 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
 
         # Check if node is down
         if ip in scenario.get('down_nodes', []):
-            self.log_info("Node status determined (mocked)", {
+            test_logger.info("Node status determined (mocked)", **{
                 "node_name": name,
                 "node_ip": ip,
                 "status": "DOWN",
@@ -183,7 +183,7 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
 
         # Check if node is primary
         if ip == scenario.get('primary'):
-            self.log_info("Node status determined (mocked)", {
+            test_logger.info("Node status determined (mocked)", **{
                 "node_name": name,
                 "node_ip": ip,
                 "status": "PRIMARY",
@@ -193,7 +193,7 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
 
         # Check if node is standby
         if ip in scenario.get('standbys', []):
-            self.log_info("Node status determined (mocked)", {
+            test_logger.info("Node status determined (mocked)", **{
                 "node_name": name,
                 "node_ip": ip,
                 "status": "STANDBY",
@@ -202,7 +202,7 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
             return 'standby'
 
         # Default to down if not in scenario
-        self.log_info("Node status determined (mocked)", {
+        test_logger.info("Node status determined (mocked)", **{
             "node_name": name,
             "node_ip": ip,
             "status": "DOWN",
@@ -217,7 +217,7 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
 
     def update_endpoint(self, service_name: str, target_ips: List[str], description: str, topology_signature: str) -> bool:
         """Mock endpoint update for testing"""
-        self.log_info("Simulating endpoint update (test mode)", {
+        test_logger.info("Simulating endpoint update (test mode)", **{
             "service_name": service_name,
             "description": description,
             "target_ips": target_ips,
@@ -228,7 +228,7 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
 
         # Simulate some failure scenarios for testing
         if not target_ips and service_name.endswith('-rw'):
-            self.log_error("Cannot update RW service with no IPs", {
+            test_logger.error("Cannot update RW service with no IPs", **{
                 "service_name": service_name,
                 "test_mode": True
             })
@@ -254,18 +254,8 @@ class PostgreSQLEndpointManagerTester:
         self.test_results.append(result)
 
         status = "PASS" if success else "FAIL"
-
-        # Use structured logging
-        record = logging.LogRecord(
-            name=test_logger.name, level=logging.INFO, pathname="", lineno=0,
-            msg=f"Test {status}: {test_name}", args=(), exc_info=None
-        )
-        record.extra_fields = {
-            "test_result": status,
-            "test_name": test_name,
-            "details": details or {}
-        }
-        test_logger.handle(record)
+        # Use structlog-bound logger
+        test_logger.info(f"Test {status}: {test_name}", test_result=status, test_name=test_name, details=details or {})
 
     def run_scenario_test(self, scenario_name: str) -> bool:
         """Test a specific cluster scenario"""
@@ -455,19 +445,14 @@ class PostgreSQLEndpointManagerTester:
         success_rate = (passed_tests / total_tests) * 100 if total_tests > 0 else 0
         overall_success = passed_tests == total_tests
 
-        # Use structured logging
-        record = logging.LogRecord(
-            name=test_logger.name, level=logging.INFO, pathname="", lineno=0,
-            msg="Comprehensive test suite completed", args=(), exc_info=None
+        test_logger.info(
+            "Comprehensive test suite completed",
+            total_tests=total_tests,
+            passed_tests=passed_tests,
+            failed_tests=total_tests - passed_tests,
+            success_rate=f"{success_rate:.1f}%",
+            overall_success=overall_success,
         )
-        record.extra_fields = {
-            "total_tests": total_tests,
-            "passed_tests": passed_tests,
-            "failed_tests": total_tests - passed_tests,
-            "success_rate": f"{success_rate:.1f}%",
-            "overall_success": overall_success
-        }
-        test_logger.handle(record)
 
         return overall_success
 
@@ -612,12 +597,6 @@ Examples:
 
     try:
         if args.comprehensive:
-            record = logging.LogRecord(
-                name=test_logger.name, level=logging.INFO, pathname="", lineno=0,
-                msg="Running comprehensive test suite", args=(), exc_info=None
-            )
-            test_logger.handle(record)
-
             success = tester.run_comprehensive_tests()
             print(f"\nTest Report:")
             print(tester.generate_test_report())
@@ -625,11 +604,7 @@ Examples:
 
         elif args.scenario:
             if args.scenario in simulator.list_scenarios():
-                record = logging.LogRecord(
-                    name=test_logger.name, level=logging.INFO, pathname="", lineno=0,
-                    msg=f"Testing scenario: {args.scenario}", args=(), exc_info=None
-                )
-                test_logger.handle(record)
+                test_logger.info(f"Testing scenario: {args.scenario}")
 
                 success = tester.run_scenario_test(args.scenario)
                 sys.exit(0 if success else 1)
@@ -655,32 +630,16 @@ Examples:
 
         else:
             # Default: run basic test
-            record = logging.LogRecord(
-                name=test_logger.name, level=logging.INFO, pathname="", lineno=0,
-                msg="Running basic test", args=(), exc_info=None
-            )
-            test_logger.handle(record)
+            test_logger.info("Running basic test")
 
             success = tester.run_scenario_test('healthy_cluster')
             sys.exit(0 if success else 1)
 
     except KeyboardInterrupt:
-        record = logging.LogRecord(
-            name=test_logger.name, level=logging.INFO, pathname="", lineno=0,
-            msg="Test interrupted by user", args=(), exc_info=None
-        )
-        test_logger.handle(record)
+        test_logger.info("Test interrupted by user")
         sys.exit(130)
     except Exception as e:
-        record = logging.LogRecord(
-            name=test_logger.name, level=logging.ERROR, pathname="", lineno=0,
-            msg="Test execution failed", args=(), exc_info=None
-        )
-        record.extra_fields = {
-            "error": str(e),
-            "error_type": type(e).__name__
-        }
-        test_logger.handle(record)
+        test_logger.error("Test execution failed", error=str(e), error_type=type(e).__name__)
         sys.exit(1)
 
 if __name__ == "__main__":
