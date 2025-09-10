@@ -24,7 +24,7 @@ RUN python -m pip install --prefix=/install --upgrade -r requirements.txt
 # This is important because we run the builder stage image (tagged as -test) to
 # execute the test harness; without PYTHONPATH the /install prefix isn't on
 # sys.path and imports (structlog, psycopg, etc.) fail at runtime.
-ENV PYTHONPATH=/install/lib/python3.9/site-packages:/usr/local/lib/python3.9/site-packages:/app:$PYTHONPATH
+ENV PYTHONPATH=/install/lib/python3.9/site-packages:/usr/local/lib/python3.9/site-packages:/app:/app/src:$PYTHONPATH
 
 # Trim common unnecessary files from the installed packages to reduce final size
 RUN find /install -type d -name 'tests' -exec rm -rf {} + || true
@@ -42,6 +42,9 @@ RUN mkdir -p /install/_runtime_libs && \
             done || true; \
         done || true
 
+# Copy source code for testing in the builder stage
+COPY src /app/src
+
 ## Final stage: minimal runtime using Distroless Python (Debian-based)
 FROM gcr.io/distroless/python3-debian11:nonroot
 
@@ -50,9 +53,9 @@ FROM gcr.io/distroless/python3-debian11:nonroot
 COPY --from=builder /install /install
 
 # Copy only the package source so the package CLI can be executed directly.
-# Copy only the `scripts/postgres_endpoint_manager` package to /app/scripts
+# Copy only the `src/postgres_endpoint_manager` package to /app/src
 # to minimize the final image size and avoid copying unrelated scripts.
-COPY scripts/postgres_endpoint_manager /app/scripts/postgres_endpoint_manager
+COPY src/postgres_endpoint_manager /app/src/postgres_endpoint_manager
 
 # Copy runtime libraries required by psycopg (libpq and common SSL libs)
 # These are installed in the builder (libpq-dev) and must be available to
@@ -70,7 +73,7 @@ COPY --from=builder /install/lib/python3.9/site-packages/ /usr/local/lib/python3
 # Ensure Python will search the builder-installed site-packages at runtime.
 # This is low-risk: it points Python at the private /install prefix where pip
 # placed packages during the builder stage, and also includes /usr/local.
-ENV PYTHONPATH=/install/lib/python3.9/site-packages:/usr/local/lib/python3.9/site-packages:/app:$PYTHONPATH
+ENV PYTHONPATH=/install/lib/python3.9/site-packages:/usr/local/lib/python3.9/site-packages:/app:/app/src:$PYTHONPATH
 
 # Entrypoint: run the package CLI module directly
-ENTRYPOINT ["python", "-m", "scripts.postgres_endpoint_manager.cli"]
+ENTRYPOINT ["python", "-m", "src.postgres_endpoint_manager.cli"]

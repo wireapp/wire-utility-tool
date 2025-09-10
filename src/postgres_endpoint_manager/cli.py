@@ -1,8 +1,6 @@
 import sys
 import argparse
-from .config import load_from_env
-from .logging_ import get_logger
-from .orchestrator import Orchestrator
+from . import load_from_env, setup_logging, Orchestrator
 
 
 def main(argv=None):
@@ -11,7 +9,7 @@ def main(argv=None):
     args = parser.parse_args(argv or sys.argv[1:])
 
     cfg = load_from_env()
-    logger = get_logger('pg-endpoint-manager')
+    logger = setup_logging('pg-endpoint-manager')
     orch = Orchestrator(cfg=cfg, logger=logger)
     ok = orch.run()
     sys.exit(0 if ok else 1)

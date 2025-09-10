@@ -1,11 +1,13 @@
 from typing import List
 from datetime import datetime, timezone
+from .logging_ import get_logger
 
 ANNOTATION_KEY = 'postgres.discovery/last-topology'
 
 class EndpointUpdater:
     def __init__(self, kube_client):
         self.kube = kube_client
+        self.logger = get_logger('endpoint-updater')
 
     def build_payload(self, target_ips: List[str], signature: str) -> dict:
         body = {
@@ -28,8 +30,15 @@ class EndpointUpdater:
         body = self.build_payload(target_ips, signature)
         try:
             self.kube.patch_endpoints(service_name, body)
+            self.logger.info("Endpoint updated successfully",
+                           service=service_name,
+                           target_ips=target_ips,
+                           endpoint_count=len(target_ips))
             return True
         except Exception as e:
-            # kube client wrapper will raise on ApiException or missing client
-            # upstream should handle/log; here we return False to signal failure
+            self.logger.error("Failed to update endpoint",
+                            service=service_name,
+                            target_ips=target_ips,
+                            error=str(e),
+                            error_type=type(e).__name__)
             return False

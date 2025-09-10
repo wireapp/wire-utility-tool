@@ -20,8 +20,9 @@ class Orchestrator:
             raise Exception('psycopg is required in the runtime image')
 
     def run(self) -> bool:
-        # 1. discover nodes from env or stored annotation
+        # discover nodes from env or stored annotation
         nodes = parse_nodes(self.cfg.pg_nodes)
+        self.logger.info("Discovered nodes from PG_NODES", raw_nodes=self.cfg.pg_nodes, parsed_count=len(nodes) if nodes else 0)
         if not nodes:
             # try stored topology
             try:
@@ -48,22 +49,31 @@ class Orchestrator:
             self.logger.error('No PostgreSQL nodes configured')
             return False
 
-        # 2. verify topology
+        # verify topology
+        self.logger.info("Starting topology verification", node_count=len(nodes), nodes=nodes)
         verifier = TopologyVerifier(self.checker, max_workers=self.cfg.max_workers, cfg=self.cfg)
         topology = verifier.verify(nodes)
+        self.logger.info("Topology verification completed",
+                        primary=topology.primary_ip,
+                        standbys=topology.standby_ips,
+                        topology_valid=bool(topology.primary_ip))
+
         if not topology.primary_ip:
             self.logger.error('No primary found during verification')
             return False
 
-        # 3. create signature and compare then update
+        # create signature and compare then update
         signature = make_signature(topology.primary_ip, topology.standby_ips)
+        self.logger.info("Created topology signature", signature=signature)
+
         try:
             stored_sig = self.kube.get_annotation(self.cfg.rw_service, 'postgres.discovery/last-topology')
-        except Exception:
+            self.logger.info("Retrieved stored signature", stored_signature=stored_sig)
+        except Exception as e:
+            self.logger.error("Failed to retrieve stored signature", error=str(e), error_type=type(e).__name__)
             stored_sig = None
 
         if stored_sig and stored_sig == signature:
-            # Emit diagnostic details so callers can understand why we skipped
             self.logger.info(
                 'Topology unchanged; skipping updates',
                 computed_signature=signature,
@@ -72,8 +82,22 @@ class Orchestrator:
             )
             return True
 
+        self.logger.info("Updating endpoints",
+                        rw_service=self.cfg.rw_service,
+                        rw_targets=[topology.primary_ip],
+                        ro_service=self.cfg.ro_service,
+                        ro_targets=topology.standby_ips,
+                        signature=signature)
+
         rw_ok = self.updater.update(self.cfg.rw_service, [topology.primary_ip], signature)
         ro_ok = self.updater.update(self.cfg.ro_service, topology.standby_ips, signature)
+
+        if rw_ok and ro_ok:
+            self.logger.info("All endpoints updated successfully",
+                           rw_service=self.cfg.rw_service,
+                           ro_service=self.cfg.ro_service,
+                           signature=signature)
+
         if not (rw_ok and ro_ok):
             self.logger.error(
                 'Failed to apply endpoint updates',

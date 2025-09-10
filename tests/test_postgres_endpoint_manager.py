@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# filepath: scripts/test-postgres-endpoint-manager.py
+# filepath: tests/test_postgres_endpoint_manager.py
 
 """
 Test script for PostgreSQL Endpoint Manager
@@ -19,9 +19,9 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 from unittest.mock import Mock, patch
 
-# Ensure repository root (parent of scripts/) is on sys.path so
-# `import scripts.postgres_endpoint_manager` works when tests mount
-# the host `scripts/` directory to `/app/scripts` in the container.
+# Ensure repository root is on sys.path so
+# `import src.postgres_endpoint_manager` works when tests mount
+# the host directory structure to the container.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
@@ -37,8 +37,58 @@ try:
         setattr(stub, 'connect', _stub_connect)
         sys.modules['psycopg'] = stub
 
-    # Import compatibility symbols from the package module
-    from scripts.postgres_endpoint_manager import PostgreSQLEndpointManager, setup_logging
+    # Create structlog stub for testing
+    if 'structlog' not in sys.modules:
+        structlog_stub = types.ModuleType('structlog')
+
+        # Mock structlog.get_logger() function
+        class MockLogger:
+            def info(self, msg, **kwargs):
+                print(f"INFO: {msg} {kwargs}")
+            def error(self, msg, **kwargs):
+                print(f"ERROR: {msg} {kwargs}")
+            def warning(self, msg, **kwargs):
+                print(f"WARNING: {msg} {kwargs}")
+            def debug(self, msg, **kwargs):
+                print(f"DEBUG: {msg} {kwargs}")
+
+        def mock_get_logger(name=None):
+            return MockLogger()
+
+        # Create mock processors/classes that logging_.py expects
+        class MockProcessor:
+            pass
+
+        class MockStdlib:
+            filter_by_level = MockProcessor()
+            add_logger_name = MockProcessor()
+            add_log_level = MockProcessor()
+            PositionalArgumentsFormatter = MockProcessor
+            BoundLogger = object
+            def LoggerFactory(self):
+                return lambda name: logging.getLogger(name)
+
+        class MockProcessors:
+            StackInfoRenderer = MockProcessor
+            format_exc_info = MockProcessor()
+            def TimeStamper(self, **kwargs):
+                return MockProcessor()
+
+        class MockDev:
+            ConsoleRenderer = MockProcessor
+
+        def mock_configure(**kwargs):
+            pass  # Do nothing for configure
+
+        setattr(structlog_stub, 'get_logger', mock_get_logger)
+        setattr(structlog_stub, 'configure', mock_configure)
+        setattr(structlog_stub, 'stdlib', MockStdlib())
+        setattr(structlog_stub, 'processors', MockProcessors())
+        setattr(structlog_stub, 'dev', MockDev())
+        sys.modules['structlog'] = structlog_stub
+
+        # Import using the clean package API
+    from src.postgres_endpoint_manager import setup_logging, Orchestrator, parse_nodes, make_signature
 except Exception as e:
     print(f"Error importing PostgreSQL endpoint manager: {e}")
     print("Make sure postgres-endpoint-manager.py is in the same directory.")
@@ -87,8 +137,8 @@ class TestClusterSimulator:
         """List all available test scenarios"""
         return list(self.scenarios.keys())
 
-class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
-    """Extended endpoint manager class for testing with mocked behaviors"""
+class MockOrchestrator(Orchestrator):
+    """Extended orchestrator class for testing with mocked behaviors"""
 
     def __init__(self, test_scenario: str = 'healthy_cluster'):
         # Set up test environment
@@ -98,44 +148,67 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
         self.simulator = TestClusterSimulator()
         self.current_scenario = self.simulator.get_scenario(test_scenario)
 
-        # Override K8s detection before calling parent constructor
-        original_check = PostgreSQLEndpointManager.check_k8s_environment
-        PostgreSQLEndpointManager.check_k8s_environment = lambda self: False
+        # Create mock dependencies to avoid requiring actual k8s/postgres connections
+        mock_cfg = Mock()
+        mock_cfg.pg_nodes = "192.168.122.31,192.168.122.32,192.168.122.33"
+        mock_cfg.namespace = "default"
+        mock_cfg.rw_service = "postgres-rw"
+        mock_cfg.ro_service = "postgres-ro"
+        mock_cfg.pg_connect_timeout = 5
+        mock_cfg.max_workers = 3
 
-        try:
-            # Call parent constructor but it will use our overridden method
-            super().__init__()
-        except SystemExit:
-            # Parent exits if not in K8s environment, but we want to continue for testing
-            pass
-        finally:
-            # Restore original method
-            PostgreSQLEndpointManager.check_k8s_environment = original_check
+        mock_kube = Mock()
+        mock_checker = Mock()
+        mock_checker.psycopg = True  # Indicate psycopg is available
 
-        # Manually initialize required attributes for testing
-        self.is_k8s_environment = False
-        self.token = "test-token"
-        self.namespace = "test-namespace"
-        self.api_server = "test-api-server"
+        # Configure mock checker to return scenario-based responses
+        def mock_is_in_recovery(ip, port=5432, user=None, password=None, dbname=None, sslmode=None):
+            """Mock the PostgresChecker.is_in_recovery method based on test scenario"""
+            scenario = self.current_scenario
 
-        # Initialize other required attributes if not set
-        if not hasattr(self, 'rw_service'):
-            self.rw_service = 'test-postgresql-rw'
-        if not hasattr(self, 'ro_service'):
-            self.ro_service = 'test-postgresql-ro'
-        if not hasattr(self, 'node_cache'):
-            self.node_cache = {}
-        if not hasattr(self, 'cache_ttl'):
-            self.cache_ttl = 30
-        if not hasattr(self, 'max_workers'):
-            self.max_workers = 3
-        if not hasattr(self, 'connection_timeout'):
-            self.connection_timeout = 5
+            # If node is in down_nodes, raise exception (connection failed)
+            if ip in scenario.get('down_nodes', []):
+                raise Exception(f"Connection failed to {ip}")
 
-        test_logger.info("Test PostgreSQL Endpoint Manager initialized", **{
-            "test_scenario": test_scenario,
-            "current_scenario": self.current_scenario
-        })
+            # If node is primary, return False (not in recovery)
+            if ip == scenario.get('primary'):
+                return False
+
+            # If node is in standbys, return True (in recovery)
+            if ip in scenario.get('standbys', []):
+                return True
+
+            # Default to exception (unknown/down)
+            raise Exception(f"Node {ip} unreachable")
+
+        mock_checker.is_in_recovery = mock_is_in_recovery
+        mock_updater = Mock()
+        mock_logger = test_logger
+
+        # Initialize with mocked dependencies
+        super().__init__(cfg=mock_cfg, kube=mock_kube, checker=mock_checker,
+                        updater=mock_updater, logger=mock_logger)
+
+        # Add compatibility attribute for tests
+        self.max_workers = mock_cfg.max_workers
+
+    # Add compatibility methods for tests that expect them
+    def get_nodes_from_environment(self):
+        """Test compatibility method."""
+        from src.postgres_endpoint_manager import parse_nodes
+        return parse_nodes(self.cfg.pg_nodes)
+
+    def create_topology_signature(self, topology: dict) -> str:
+        """Test compatibility method."""
+        from src.postgres_endpoint_manager import make_signature
+        return make_signature(topology.get('primary_ip'), topology.get('standby_ips', []))
+
+    def verify_topology(self, nodes):
+        """Test compatibility method."""
+        from src.postgres_endpoint_manager.topology import TopologyVerifier
+        verifier = TopologyVerifier(self.checker, max_workers=self.cfg.max_workers, cfg=self.cfg)
+        topology = verifier.verify(nodes)
+        return {'primary_ip': topology.primary_ip, 'standby_ips': topology.standby_ips}
 
     def setup_test_environment(self):
         """Setup test environment variables"""
@@ -155,10 +228,6 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
         for key, value in test_env.items():
             if key not in os.environ:
                 os.environ[key] = value
-
-    def check_k8s_environment(self) -> bool:
-        """Override to always return False for testing"""
-        return False
 
     def check_postgres_node(self, ip: str, name: str) -> Optional[str]:
         """Mock PostgreSQL node checking based on test scenario"""
@@ -263,7 +332,7 @@ class PostgreSQLEndpointManagerTester:
             test_logger.info(f"Running scenario test: {scenario_name}")
 
             # Create test manager with scenario
-            manager = MockPostgreSQLEndpointManager(scenario_name)
+            manager = MockOrchestrator(scenario_name)
             scenario = manager.current_scenario
 
             # Run the manager
@@ -304,7 +373,7 @@ class PostgreSQLEndpointManagerTester:
             original_nodes = os.environ.get('PG_NODES', '')
             os.environ['PG_NODES'] = test_nodes
 
-            manager = MockPostgreSQLEndpointManager()
+            manager = MockOrchestrator()
             nodes = manager.get_nodes_from_environment()
 
             expected_nodes = [
@@ -344,7 +413,7 @@ class PostgreSQLEndpointManagerTester:
         try:
             test_logger.info("Testing topology signature creation")
 
-            manager = MockPostgreSQLEndpointManager()
+            manager = MockOrchestrator()
 
             test_topology = {
                 'primary_ip': '192.168.122.31',
@@ -380,7 +449,7 @@ class PostgreSQLEndpointManagerTester:
         try:
             test_logger.info("Testing parallel processing")
 
-            manager = MockPostgreSQLEndpointManager()
+            manager = MockOrchestrator()
             nodes = manager.get_nodes_from_environment()
 
             # Time the topology verification
