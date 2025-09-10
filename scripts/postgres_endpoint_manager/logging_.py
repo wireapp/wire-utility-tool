@@ -11,8 +11,7 @@ def _configure_structlog():
     helpers, a TimeStamper, and JSONRenderer. The LOG_LEVEL env var controls
     the minimum level for filtering.
     """
-    level_name = os.environ.get('LOG_LEVEL', 'INFO').upper()
-    level = getattr(logging, level_name, logging.INFO)
+    level = getattr(logging, os.environ.get('LOG_LEVEL', 'INFO').upper(), logging.INFO)
 
     # Basic stdlib config so any libraries using logging still emit to stdout
     logging.basicConfig(stream=sys.stdout, level=level, format="%(message)s")

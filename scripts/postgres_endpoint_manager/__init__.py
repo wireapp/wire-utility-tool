@@ -16,9 +16,6 @@ logger = setup_logging(__name__)
 
 class PostgreSQLEndpointManager:
     """Compatibility wrapper that delegates to the package Orchestrator.
-
-    This preserves the old class name for any external users while keeping
-    execution centralized in `scripts.postgres_endpoint_manager.orchestrator`.
     """
     def __init__(self, *args, **kwargs):
         # Instantiate orchestrator with any provided deps if passed through kwargs
@@ -31,6 +28,7 @@ class PostgreSQLEndpointManager:
             return False
 
     def get_nodes_from_environment(self):
+        logger.info("Parsing PostgreSQL nodes from environment", raw_nodes=self._orch.cfg.pg_nodes)
         return self._orch.cfg.pg_nodes and __import__('scripts.postgres_endpoint_manager.utils', fromlist=['parse_nodes']).parse_nodes(self._orch.cfg.pg_nodes)
 
     def create_topology_signature(self, topology: dict) -> str:
@@ -52,6 +50,18 @@ class PostgreSQLEndpointManager:
                 try:
                     res = future.result()
                 except Exception:
+                    # Log future exception so we see failed node checks
+                    try:
+                        exc = future.exception()
+                    except Exception:
+                        exc = None
+                    logger.error(
+                        "Node check failed (future exception)",
+                        node_name=name,
+                        node_ip=ip,
+                        error=str(exc),
+                        error_type=type(exc).__name__ if exc else None,
+                    )
                     continue
                 if res is True or res == 'standby':
                     standby_ips.append(ip)
@@ -65,8 +75,6 @@ class PostgreSQLEndpointManager:
             primary_name = None
 
         return {'primary_ip': primary_ip, 'standby_ips': sorted(standby_ips)}
-    # log_info / log_error compatibility wrappers removed; call-sites should
-    # use the module-level `logger` (returned by setup_logging) directly.
 
     def update_endpoint(self, service_name: str, target_ips, description: str, topology_signature: str) -> bool:
         return self._orch.updater.update(service_name, target_ips, topology_signature)
@@ -78,14 +86,29 @@ class PostgreSQLEndpointManager:
         port = getattr(cfg, 'pg_port', None) or 5432
         tcp_timeout = getattr(cfg, 'tcp_connect_timeout', None) or 1.0
 
-        # Quick TCP pre-check to avoid long DB connect timeouts for unreachable hosts
+        # Log TCP connection attempt
+        logger.info(
+            "Attempting TCP connectivity check",
+            node_name=name,
+            node_ip=ip,
+            connect_port=int(port),
+            timeout=tcp_timeout,
+        )
+
         try:
             with socket.create_connection((ip, int(port)), timeout=float(tcp_timeout)):
                 pass
+            logger.info(
+                "TCP connectivity check passed",
+                node_name=name,
+                node_ip=ip,
+                port=int(port),
+                timeout=tcp_timeout,
+            )
         except Exception as e:
             # Unreachable at TCP level, treat as unknown and log the connectivity failure
             logger.error(
-                "Node status determined (TCP check failed)",
+                "TCP connectivity check failed",
                 node_name=name,
                 node_ip=ip,
                 status="DOWN",
@@ -114,7 +137,14 @@ class PostgreSQLEndpointManager:
                 getattr(cfg, 'pg_sslmode', None)
             )
         except Exception:
-            # Checker had an error; return unknown so verification can continue with other nodes
+            # Checker had an error; log it and return unknown so verification can continue
+            import traceback as _tb
+            logger.error(
+                "DB checker failed",
+                node_name=name,
+                node_ip=ip,
+                error=_tb.format_exc(),
+            )
             return None
 
         if res is True or res == 'standby':
@@ -125,6 +155,14 @@ class PostgreSQLEndpointManager:
 
     def run(self):
         nodes = self.get_nodes_from_environment() or []
+        # Log discovered nodes so we always see what will be checked
+        cfg = getattr(self._orch, 'cfg', None)
+        logger.info(
+            "Nodes discovered from environment",
+            pg_nodes=getattr(cfg, 'pg_nodes', None),
+            total_nodes=len(nodes),
+            nodes=nodes,
+        )
         if not nodes:
             try:
                 # Log attempt to fetch stored topology annotation from kube
