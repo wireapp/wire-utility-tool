@@ -1,3 +1,4 @@
+import os
 from .logging_ import get_logger
 from .exceptions import EndpointManagerError
 from .utils import retry_with_backoff
@@ -154,6 +155,11 @@ class PostgreSQLEndpointManager:
         return None
 
     def run(self):
+        # Always log entry to run method with env diagnostics
+        logger.info("PostgreSQL Endpoint Manager run() started",
+                   log_level_env=os.getenv('LOG_LEVEL', 'NOT_SET'),
+                   pg_nodes_env=os.getenv('PG_NODES', 'NOT_SET'))
+
         nodes = self.get_nodes_from_environment() or []
         # Log discovered nodes so we always see what will be checked
         cfg = getattr(self._orch, 'cfg', None)
@@ -191,13 +197,16 @@ class PostgreSQLEndpointManager:
             logger.error('No PostgreSQL nodes configured')
             return False
 
+        logger.info("Starting topology verification", node_count=len(nodes))
         topology = self.verify_topology(nodes)
+        logger.info("Topology verification completed", topology=topology)
+
         if not topology.get('primary_ip'):
             logger.error('No primary found during verification')
             return False
 
         signature = self.create_topology_signature({'primary_ip': topology.get('primary_ip'), 'standby_ips': topology.get('standby_ips', [])})
-        logger.info("Kube: fetching stored topology annotation before update", service=self._orch.cfg.rw_service, annotation='postgres.discovery/last-topology')
+        logger.info("Computed topology signature", signature=signature)
         try:
             stored_sig = self._orch.kube.get_annotation(self._orch.cfg.rw_service, 'postgres.discovery/last-topology')
             logger.info("Kube: fetched annotation before update", service=self._orch.cfg.rw_service, stored_signature=stored_sig)
