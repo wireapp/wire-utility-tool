@@ -82,17 +82,27 @@ class PostgreSQLEndpointManager:
         try:
             with socket.create_connection((ip, int(port)), timeout=float(tcp_timeout)):
                 pass
-        except Exception:
-            # Unreachable at TCP level, treat as unknown
+        except Exception as e:
+            # Unreachable at TCP level, treat as unknown and log the connectivity failure
+            logger.error(
+                "Node status determined (TCP check failed)",
+                node_name=name,
+                node_ip=ip,
+                status="DOWN",
+                connectivity_check="tcp_connect",
+                error=str(e),
+                timeout=tcp_timeout,
+            )
             return None
 
         try:
-            # Log planned (non-secret) connection parameters for debugging
-            logger.info('Attempting DB driver connect', {
-                'connect_host': ip,
-                'connect_port': int(port),
-                'connect_timeout': getattr(cfg, 'pg_connect_timeout', None)
-            })
+            # Log planned (non-secret) connection parameters for debugging (structured kw-only)
+            logger.info(
+                "Attempting DB driver connect",
+                connect_host=ip,
+                connect_port=int(port),
+                connect_timeout=getattr(cfg, 'pg_connect_timeout', None),
+            )
 
             # Pass configured DB credentials and connection options through to the checker
             res = self._orch.checker.is_in_recovery(
@@ -117,8 +127,12 @@ class PostgreSQLEndpointManager:
         nodes = self.get_nodes_from_environment() or []
         if not nodes:
             try:
+                # Log attempt to fetch stored topology annotation from kube
+                logger.info("Kube: fetching stored topology annotation", service=self._orch.cfg.rw_service, annotation='postgres.discovery/last-topology')
                 stored = self._orch.kube.get_annotation(self._orch.cfg.rw_service, 'postgres.discovery/last-topology')
-            except Exception:
+                logger.info("Kube: fetched annotation", service=self._orch.cfg.rw_service, stored_signature=stored)
+            except Exception as e:
+                logger.error("Kube: failed to fetch stored topology annotation", service=getattr(self._orch.cfg, 'rw_service', None), error=str(e), error_type=type(e).__name__)
                 stored = None
             if stored:
                 primary_ip = None
@@ -145,15 +159,32 @@ class PostgreSQLEndpointManager:
             return False
 
         signature = self.create_topology_signature({'primary_ip': topology.get('primary_ip'), 'standby_ips': topology.get('standby_ips', [])})
+        logger.info("Kube: fetching stored topology annotation before update", service=self._orch.cfg.rw_service, annotation='postgres.discovery/last-topology')
         try:
             stored_sig = self._orch.kube.get_annotation(self._orch.cfg.rw_service, 'postgres.discovery/last-topology')
-        except Exception:
+            logger.info("Kube: fetched annotation before update", service=self._orch.cfg.rw_service, stored_signature=stored_sig)
+        except Exception as e:
+            logger.error("Kube: failed to fetch stored topology annotation before update", service=getattr(self._orch.cfg, 'rw_service', None), error=str(e), error_type=type(e).__name__)
             stored_sig = None
 
         if stored_sig and stored_sig == signature:
-            logger.info('Topology unchanged; skipping updates')
+            logger.info('Topology unchanged; skipping updates', computed_signature=signature, stored_signature=stored_sig, topology=topology)
             return True
 
+        # Attempt endpoint updates and log kube client results
         rw_ok = self.update_endpoint(self._orch.cfg.rw_service, [topology.get('primary_ip')], '', signature)
         ro_ok = self.update_endpoint(self._orch.cfg.ro_service, topology.get('standby_ips', []), '', signature)
+
+        logger.info(
+            "Kube: endpoint update results",
+            rw_service=getattr(self._orch.cfg, 'rw_service', None),
+            ro_service=getattr(self._orch.cfg, 'ro_service', None),
+            rw_ok=bool(rw_ok),
+            ro_ok=bool(ro_ok),
+            signature=signature,
+        )
+
+        if not (rw_ok and ro_ok):
+            logger.error("Kube: one or more endpoint updates failed", rw_ok=bool(rw_ok), ro_ok=bool(ro_ok), signature=signature)
+
         return bool(rw_ok and ro_ok)
