@@ -8,16 +8,18 @@ on:
       - 'pg-v*'
     paths:
       - 'Dockerfile.postgres-endpoint-manager'
-      - 'scripts/postgres-endpoint-manager.py'
-      - 'scripts/test-postgres-endpoint-manager.py'
+      - 'src/postgres_endpoint_manager/**'
+      - 'tests/test_postgres_endpoint_manager.py'
+      - 'requirements.txt'
       - '.github/workflows/build-and-push-pg-manager.yml'
   pull_request:
     branches:
       - main
     paths:
       - 'Dockerfile.postgres-endpoint-manager'
-      - 'scripts/postgres-endpoint-manager.py'
-      - 'scripts/test-postgres-endpoint-manager.py'
+      - 'src/postgres_endpoint_manager/**'
+      - 'tests/test_postgres_endpoint_manager.py'
+      - 'requirements.txt'
       - '.github/workflows/build-and-push-pg-manager.yml'
 
 env:
