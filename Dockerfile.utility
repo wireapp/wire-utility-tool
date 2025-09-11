@@ -37,8 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm get-pip.py \
  && rm -rf /var/lib/apt/lists/*
 
- RUN pip3 install cassandra-driver
- RUN pip3 install requests
+ RUN pip3 install cassandra-driver requests
 # Download and install Cassandra 3.11 cqlsh (compatible version)
 RUN mkdir -p /opt/cassandra && \
     cd /opt/cassandra && \
@@ -86,7 +85,9 @@ USER nonroot
 # Set environment variables for convenience
 ENV HOME=/home/nonroot \
     SHELL=/bin/bash \
-    TERM=xterm-256color
+    TERM=xterm-256color \
+    PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+
 
 # Set working directory
 WORKDIR /home/nonroot
