@@ -60,7 +60,7 @@ push-utility-multi:
 # Test wire-utility-tool image
 test-utility:
 	@echo "Testing wire-utility-tool image..."
-	docker run --rm $(UTILITY_IMAGE):$(TAG) bash -c "echo 'Testing tools...' && python3 --version && python2 --version && psql --version && cqlsh --version && mc --version"
+	docker run --rm --entrypoint="" $(UTILITY_IMAGE):$(TAG) bash -c "echo 'Testing tools...' && python3 --version && python2 --version && psql --version && cqlsh --version && mc --version && echo 'Testing es command...' && es usages && echo 'Testing PATH...' && which bash && echo 'All tests passed!'"
 
 # ============================================================================
 # PostgreSQL Endpoint Manager Targets
