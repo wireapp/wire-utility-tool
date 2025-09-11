@@ -44,6 +44,7 @@ RUN mkdir -p /install/_runtime_libs && \
 
 # Copy source code for testing in the builder stage
 COPY src /app/src
+COPY tests /app/tests
 
 ## Final stage: minimal runtime using Distroless Python (Debian-based)
 FROM gcr.io/distroless/python3-debian11:nonroot

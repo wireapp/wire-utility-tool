@@ -107,7 +107,7 @@ test-pg-manager:
 test-pg-manager-custom:
 	@echo "Testing postgres-endpoint-manager with custom node configuration..."
 	docker run --rm \
-		-e PG_NODES="10.0.0.1,10.0.0.2,10.0.0.3" \
+		-e PG_NODES="192.168.122.31,192.168.122.32,192.168.122.33" \
 		-e RW_SERVICE="my-postgres-rw" \
 		-e RO_SERVICE="my-postgres-ro" \
 		-e PGUSER="testuser" \

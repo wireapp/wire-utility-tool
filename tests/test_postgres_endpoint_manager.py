@@ -369,7 +369,7 @@ class PostgreSQLEndpointManagerTester:
             test_logger.info("Testing environment variable parsing")
 
             # Test with custom PG_NODES
-            test_nodes = "10.0.0.1,10.0.0.2,10.0.0.3"
+            test_nodes = "192.168.122.31,192.168.122.32,192.168.122.33"
             original_nodes = os.environ.get('PG_NODES', '')
             os.environ['PG_NODES'] = test_nodes
 
@@ -377,9 +377,9 @@ class PostgreSQLEndpointManagerTester:
             nodes = manager.get_nodes_from_environment()
 
             expected_nodes = [
-                ("10.0.0.1", "pg-10-0-0-1"),
-                ("10.0.0.2", "pg-10-0-0-2"),
-                ("10.0.0.3", "pg-10-0-0-3")
+                ("192.168.122.31", "pg-192-168-122-31"),
+                ("192.168.122.32", "pg-192-168-122-32"),
+                ("192.168.122.33", "pg-192-168-122-33")
             ]
 
             if nodes == expected_nodes:
