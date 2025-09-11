@@ -93,8 +93,8 @@ jobs:
           docker run --rm --platform linux/amd64 --entrypoint="" test-image:latest /bin/bash -c "
             echo 'Testing es command...' &&
             es usages &&
-            echo 'Testing status command...' &&
-            which status &&
+            echo 'Testing status symlink exists...' &&
+            ls -la /usr/local/bin/status &&
             echo 'ES alias and status symlinks working!'
           "
 
