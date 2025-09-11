@@ -71,6 +71,12 @@ RUN chmod +x /usr/local/bin/entrypoint.py
 COPY scripts/es-debug.py /usr/local/bin/es-debug.py
 RUN chmod +x /usr/local/bin/es-debug.py
 
+# Create es symlink for easier access
+RUN ln -s /usr/local/bin/es-debug.py /usr/local/bin/es
+
+# Create status symlink (will point to script created by entrypoint)
+RUN ln -s /tmp/status.sh /usr/local/bin/status
+
 # Create non-root user
 RUN adduser --disabled-password --gecos "" --uid 65532 nonroot
 

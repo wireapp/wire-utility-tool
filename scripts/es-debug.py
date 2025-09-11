@@ -49,8 +49,9 @@ def tasks_list():
     r = requests.get(f"{ES_URL}/_tasks?pretty")
     print(r.text)
 
-def usage():
-    print("Usage: es_debug.py <command>")
+def usages():
+    """Show usage information"""
+    print("Usage: es <command>")
     print("Commands:")
     print("  health        - Cluster health")
     print("  nodes         - Nodes info")
@@ -61,7 +62,7 @@ def usage():
     print("  shards        - Shard allocation")
     print("  tasks         - Running tasks")
     print("  all           - Run all commands (default)")
-    sys.exit(1)
+    print("  usages        - Show this usage information")
 
 def main():
     parser = argparse.ArgumentParser(add_help=False)
@@ -77,6 +78,7 @@ def main():
         "pending": pending_tasks,
         "shards": shard_allocation,
         "tasks": tasks_list,
+        "usages": usages,
         "all": lambda: [
             cluster_health(), print(),
             nodes_info(), print(),
@@ -92,7 +94,8 @@ def main():
     if args.command in commands:
         commands[args.command]()
     else:
-        usage()
+        usages()
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
