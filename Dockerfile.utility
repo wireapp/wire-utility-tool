@@ -37,8 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm get-pip.py \
  && rm -rf /var/lib/apt/lists/*
 
- RUN pip3 install cassandra-driver
- RUN pip3 install requests
+ RUN pip3 install cassandra-driver requests
 # Download and install Cassandra 3.11 cqlsh (compatible version)
 RUN mkdir -p /opt/cassandra && \
     cd /opt/cassandra && \
@@ -71,6 +70,12 @@ RUN chmod +x /usr/local/bin/entrypoint.py
 COPY scripts/es-debug.py /usr/local/bin/es-debug.py
 RUN chmod +x /usr/local/bin/es-debug.py
 
+# Create es symlink for easier access
+RUN ln -s /usr/local/bin/es-debug.py /usr/local/bin/es
+
+# Create status symlink (will point to script created by entrypoint)
+RUN ln -s /tmp/status.sh /usr/local/bin/status
+
 # Create non-root user
 RUN adduser --disabled-password --gecos "" --uid 65532 nonroot
 
@@ -80,7 +85,9 @@ USER nonroot
 # Set environment variables for convenience
 ENV HOME=/home/nonroot \
     SHELL=/bin/bash \
-    TERM=xterm-256color
+    TERM=xterm-256color \
+    PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+
 
 # Set working directory
 WORKDIR /home/nonroot

@@ -58,22 +58,25 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push Docker image
+      - name: Build test image (single platform)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile.utility
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: test-image:latest
+          cache-from: type=gha,scope=utility-test
 
       - name: Test image
-        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         run: |
-          docker run --rm --platform linux/amd64 --entrypoint /bin/bash ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest -c "
+          echo "Testing image: test-image:latest"
+
+          # Test basic tools with correct shell path
+          docker run --rm --platform linux/amd64 --entrypoint="" test-image:latest python3 -c "import sys; print('Testing Python 3...'); print('Python 3:', sys.version)"
+
+          docker run --rm --platform linux/amd64 --entrypoint="" test-image:latest /bin/bash -c "
             echo 'Testing tools installation...' &&
             python3 --version &&
             python2 --version &&
@@ -84,3 +87,39 @@ jobs:
             rabbitmqadmin --version &&
             echo 'All tools working correctly!'
           "
+
+          # Test new es alias functionality
+          echo 'Testing es alias functionality...'
+          docker run --rm --platform linux/amd64 --entrypoint="" test-image:latest /bin/bash -c "
+            echo 'Testing es command...' &&
+            es usages &&
+            echo 'Testing status symlink exists...' &&
+            ls -la /usr/local/bin/status &&
+            echo 'ES alias and status symlinks working!'
+          "
+
+      - name: Build and push utility image
+        # if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.utility
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=utility
+          cache-to: type=gha,mode=max,scope=utility
+
+      - name: Build utility image (PR - no push)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.utility
+          platforms: linux/amd64
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=utility
+          cache-to: type=gha,mode=max,scope=utility

@@ -189,7 +189,8 @@ echo "mc admin info wire-minio  # Show MinIO server info"
 echo "cqlsh                     # Connect to Cassandra"
 echo "rabbitmqadmin list queues # List RabbitMQ queues"
 echo "psql                      # Connect to PostgreSQL"
-echo "es-debug.py usages        # List available commands to run with es-debug.py (e.g es-debug.py health) to debug Elasticsearch"
+echo "es usages                 # Show all available Elasticsearch debug commands"
+echo "es all                    # Run all Elasticsearch diagnostics (health, nodes, indices, etc.)"
 echo ""
 '''
     status_file = Path('/tmp/status.sh')
@@ -334,7 +335,7 @@ def check_postgresql_connection(host, port, username, database):
         if success:
             logger.info(f"PostgreSQL connection successful: {stdout.strip()}")
         else:
-            logger.error(f"PostgreSQL connection failed: {stderr}") 
+            logger.error(f"PostgreSQL connection failed: {stderr}")
         return success
     except Exception as e:
         logger.error(f"PostgreSQL connection test failed: {e}")
@@ -349,7 +350,7 @@ def status(interval=120):
             # MinIO HTTP health check (if env set), else TCP
             minio_endpoint = MINIO_SERVICE_ENDPOINT
             minio_health_url = f"{minio_endpoint}/minio/health/live" if minio_endpoint else None
-            check_service_health(minio_health_url)            
+            check_service_health(minio_health_url)
 
             #  Cassandra health check
             cassandra_host = CASSANDRA_SERVICE_NAME
@@ -392,7 +393,7 @@ def status(interval=120):
     # Run the probe in a background thread so it doesn't block the main loop
     thread = threading.Thread(target=probe, daemon=True)
     thread.start()
-    
+
 def main():
     """Main entrypoint function"""
     logger.info("Starting Wire utility debug pod...")
