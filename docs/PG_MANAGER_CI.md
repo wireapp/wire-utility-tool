@@ -25,7 +25,7 @@ CI workflow (what it does, precisely)
    - docker/build-push-action builds with `target: builder`, tag `test-image:latest` (not pushed).
 2. Run tests inside test image:
    - The workflow mounts repository `scripts/` into `/app/scripts` and invokes the test harness with Python:
-     - python3 /app/scripts/test-postgres-endpoint-manager.py --comprehensive
+     - python3 /app/tests/test_postgres_endpoint_manager.py --comprehensive
 3. If tests pass and this is not a PR, build and push the multi-platform final runtime image (no --target).
    - The final image is what gets tagged/pushed to the registry.
 
@@ -47,7 +47,7 @@ make build-pg-manager-test
 docker run --rm \
   -v $(pwd)/scripts:/app/scripts:ro \
   --entrypoint python3 \
-  <image>-test:latest /app/scripts/test-postgres-endpoint-manager.py --comprehensive
+  <image>-test:latest /app/tests/test_postgres_endpoint_manager.py --comprehensive
 ```
 
 - Sanity-check the runtime image locally (this will show Python but not shell or psql):
@@ -65,7 +65,7 @@ docker run --rm -it --entrypoint bash <image>-test:latest
 # run the manager script in test mode (script is in /usr/local/bin or mount it):
 python /usr/local/bin/postgres-endpoint-manager.py --test
 # or run the test harness directly (if scripts are mounted):
-python /app/scripts/test-postgres-endpoint-manager.py --scenario healthy_cluster
+python /app/tests/test_postgres_endpoint_manager.py --scenario healthy_cluster
 ```
 
 - Inspect final runtime image filesystem (no shell available inside distroless; use docker create + docker cp):

@@ -83,12 +83,12 @@ jobs:
             echo 'PostgreSQL endpoint manager ready!'
           "
 
-          # Test functionality: mount the repository scripts and invoke the test harness
+          # Test functionality: mount the repository tests and invoke the test harness
           echo 'Testing functionality...'
           docker run --rm --platform linux/amd64 \
-            -v $GITHUB_WORKSPACE/scripts:/app/scripts:ro \
+            -v $GITHUB_WORKSPACE/tests:/app/tests:ro \
             --entrypoint python3 \
-            test-image:latest /app/scripts/test-postgres-endpoint-manager.py --comprehensive
+            test-image:latest /app/tests/test_postgres_endpoint_manager.py --comprehensive
 
       - name: Build and push pg-manager image
         # if: github.event_name != 'pull_request'
