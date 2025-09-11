@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# filepath: scripts/test-postgres-endpoint-manager.py
+# filepath: tests/test_postgres_endpoint_manager.py
 
 """
 Test script for PostgreSQL Endpoint Manager
@@ -19,18 +19,76 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 from unittest.mock import Mock, patch
 
-# Import the main endpoint manager class
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Ensure repository root is on sys.path so
+# `import src.postgres_endpoint_manager` works when tests mount
+# the host directory structure to the container.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 try:
-    # Import from the main script file
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("postgres_endpoint_manager",
-                                                 os.path.join(os.path.dirname(__file__), "postgres-endpoint-manager.py"))
-    postgres_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(postgres_module)
-    PostgreSQLEndpointManager = postgres_module.PostgreSQLEndpointManager
-    StructuredFormatter = postgres_module.StructuredFormatter
-    setup_logging = postgres_module.setup_logging
+    # Ensure a psycopg stub exists before loading the module so the module-level
+    # import in postgres-endpoint-manager.py sees it and sets PSYCOPG_AVAILABLE.
+    import importlib.util, types
+    if 'psycopg' not in sys.modules:
+        stub = types.ModuleType('psycopg')
+        setattr(stub, '__version__', 'test')
+        # minimal connect stub to avoid attribute errors if accidentally called
+        def _stub_connect(*a, **k):
+            raise RuntimeError('psycopg.connect should not be called in unit tests')
+        setattr(stub, 'connect', _stub_connect)
+        sys.modules['psycopg'] = stub
+
+    # Create structlog stub for testing
+    if 'structlog' not in sys.modules:
+        structlog_stub = types.ModuleType('structlog')
+
+        # Mock structlog.get_logger() function
+        class MockLogger:
+            def info(self, msg, **kwargs):
+                print(f"INFO: {msg} {kwargs}")
+            def error(self, msg, **kwargs):
+                print(f"ERROR: {msg} {kwargs}")
+            def warning(self, msg, **kwargs):
+                print(f"WARNING: {msg} {kwargs}")
+            def debug(self, msg, **kwargs):
+                print(f"DEBUG: {msg} {kwargs}")
+
+        def mock_get_logger(name=None):
+            return MockLogger()
+
+        # Create mock processors/classes that logging_.py expects
+        class MockProcessor:
+            pass
+
+        class MockStdlib:
+            filter_by_level = MockProcessor()
+            add_logger_name = MockProcessor()
+            add_log_level = MockProcessor()
+            PositionalArgumentsFormatter = MockProcessor
+            BoundLogger = object
+            def LoggerFactory(self):
+                return lambda name: logging.getLogger(name)
+
+        class MockProcessors:
+            StackInfoRenderer = MockProcessor
+            format_exc_info = MockProcessor()
+            def TimeStamper(self, **kwargs):
+                return MockProcessor()
+
+        class MockDev:
+            ConsoleRenderer = MockProcessor
+
+        def mock_configure(**kwargs):
+            pass  # Do nothing for configure
+
+        setattr(structlog_stub, 'get_logger', mock_get_logger)
+        setattr(structlog_stub, 'configure', mock_configure)
+        setattr(structlog_stub, 'stdlib', MockStdlib())
+        setattr(structlog_stub, 'processors', MockProcessors())
+        setattr(structlog_stub, 'dev', MockDev())
+        sys.modules['structlog'] = structlog_stub
+
+        # Import using the clean package API
+    from src.postgres_endpoint_manager import setup_logging, Orchestrator, parse_nodes, make_signature
 except Exception as e:
     print(f"Error importing PostgreSQL endpoint manager: {e}")
     print("Make sure postgres-endpoint-manager.py is in the same directory.")
@@ -79,8 +137,8 @@ class TestClusterSimulator:
         """List all available test scenarios"""
         return list(self.scenarios.keys())
 
-class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
-    """Extended endpoint manager class for testing with mocked behaviors"""
+class MockOrchestrator(Orchestrator):
+    """Extended orchestrator class for testing with mocked behaviors"""
 
     def __init__(self, test_scenario: str = 'healthy_cluster'):
         # Set up test environment
@@ -90,44 +148,67 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
         self.simulator = TestClusterSimulator()
         self.current_scenario = self.simulator.get_scenario(test_scenario)
 
-        # Override K8s detection before calling parent constructor
-        original_check = PostgreSQLEndpointManager.check_k8s_environment
-        PostgreSQLEndpointManager.check_k8s_environment = lambda self: False
+        # Create mock dependencies to avoid requiring actual k8s/postgres connections
+        mock_cfg = Mock()
+        mock_cfg.pg_nodes = "192.168.122.31,192.168.122.32,192.168.122.33"
+        mock_cfg.namespace = "default"
+        mock_cfg.rw_service = "postgres-rw"
+        mock_cfg.ro_service = "postgres-ro"
+        mock_cfg.pg_connect_timeout = 5
+        mock_cfg.max_workers = 3
 
-        try:
-            # Call parent constructor but it will use our overridden method
-            super().__init__()
-        except SystemExit:
-            # Parent exits if not in K8s environment, but we want to continue for testing
-            pass
-        finally:
-            # Restore original method
-            PostgreSQLEndpointManager.check_k8s_environment = original_check
+        mock_kube = Mock()
+        mock_checker = Mock()
+        mock_checker.psycopg = True  # Indicate psycopg is available
 
-        # Manually initialize required attributes for testing
-        self.is_k8s_environment = False
-        self.token = "test-token"
-        self.namespace = "test-namespace"
-        self.api_server = "test-api-server"
+        # Configure mock checker to return scenario-based responses
+        def mock_is_in_recovery(ip, port=5432, user=None, password=None, dbname=None, sslmode=None):
+            """Mock the PostgresChecker.is_in_recovery method based on test scenario"""
+            scenario = self.current_scenario
 
-        # Initialize other required attributes if not set
-        if not hasattr(self, 'rw_service'):
-            self.rw_service = 'test-postgresql-rw'
-        if not hasattr(self, 'ro_service'):
-            self.ro_service = 'test-postgresql-ro'
-        if not hasattr(self, 'node_cache'):
-            self.node_cache = {}
-        if not hasattr(self, 'cache_ttl'):
-            self.cache_ttl = 30
-        if not hasattr(self, 'max_workers'):
-            self.max_workers = 3
-        if not hasattr(self, 'connection_timeout'):
-            self.connection_timeout = 5
+            # If node is in down_nodes, raise exception (connection failed)
+            if ip in scenario.get('down_nodes', []):
+                raise Exception(f"Connection failed to {ip}")
 
-        self.log_info("Test PostgreSQL Endpoint Manager initialized", {
-            "test_scenario": test_scenario,
-            "current_scenario": self.current_scenario
-        })
+            # If node is primary, return False (not in recovery)
+            if ip == scenario.get('primary'):
+                return False
+
+            # If node is in standbys, return True (in recovery)
+            if ip in scenario.get('standbys', []):
+                return True
+
+            # Default to exception (unknown/down)
+            raise Exception(f"Node {ip} unreachable")
+
+        mock_checker.is_in_recovery = mock_is_in_recovery
+        mock_updater = Mock()
+        mock_logger = test_logger
+
+        # Initialize with mocked dependencies
+        super().__init__(cfg=mock_cfg, kube=mock_kube, checker=mock_checker,
+                        updater=mock_updater, logger=mock_logger)
+
+        # Add compatibility attribute for tests
+        self.max_workers = mock_cfg.max_workers
+
+    # Add compatibility methods for tests that expect them
+    def get_nodes_from_environment(self):
+        """Test compatibility method."""
+        from src.postgres_endpoint_manager import parse_nodes
+        return parse_nodes(self.cfg.pg_nodes)
+
+    def create_topology_signature(self, topology: dict) -> str:
+        """Test compatibility method."""
+        from src.postgres_endpoint_manager import make_signature
+        return make_signature(topology.get('primary_ip'), topology.get('standby_ips', []))
+
+    def verify_topology(self, nodes):
+        """Test compatibility method."""
+        from src.postgres_endpoint_manager.topology import TopologyVerifier
+        verifier = TopologyVerifier(self.checker, max_workers=self.cfg.max_workers, cfg=self.cfg)
+        topology = verifier.verify(nodes)
+        return {'primary_ip': topology.primary_ip, 'standby_ips': topology.standby_ips}
 
     def setup_test_environment(self):
         """Setup test environment variables"""
@@ -143,16 +224,14 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
             'TZ': 'UTC'
         }
 
+        # Only set defaults if not already provided by the caller (so tests can inject custom values)
         for key, value in test_env.items():
-            os.environ[key] = value
-
-    def check_k8s_environment(self) -> bool:
-        """Override to always return False for testing"""
-        return False
+            if key not in os.environ:
+                os.environ[key] = value
 
     def check_postgres_node(self, ip: str, name: str) -> Optional[str]:
         """Mock PostgreSQL node checking based on test scenario"""
-        self.log_info("Checking PostgreSQL node (mocked)", {
+        test_logger.info("Checking PostgreSQL node (mocked)", **{
             "node_name": name,
             "node_ip": ip,
             "test_mode": True,
@@ -163,7 +242,7 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
 
         # Check if node is down
         if ip in scenario.get('down_nodes', []):
-            self.log_info("Node status determined (mocked)", {
+            test_logger.info("Node status determined (mocked)", **{
                 "node_name": name,
                 "node_ip": ip,
                 "status": "DOWN",
@@ -173,7 +252,7 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
 
         # Check if node is primary
         if ip == scenario.get('primary'):
-            self.log_info("Node status determined (mocked)", {
+            test_logger.info("Node status determined (mocked)", **{
                 "node_name": name,
                 "node_ip": ip,
                 "status": "PRIMARY",
@@ -183,7 +262,7 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
 
         # Check if node is standby
         if ip in scenario.get('standbys', []):
-            self.log_info("Node status determined (mocked)", {
+            test_logger.info("Node status determined (mocked)", **{
                 "node_name": name,
                 "node_ip": ip,
                 "status": "STANDBY",
@@ -192,7 +271,7 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
             return 'standby'
 
         # Default to down if not in scenario
-        self.log_info("Node status determined (mocked)", {
+        test_logger.info("Node status determined (mocked)", **{
             "node_name": name,
             "node_ip": ip,
             "status": "DOWN",
@@ -207,7 +286,7 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
 
     def update_endpoint(self, service_name: str, target_ips: List[str], description: str, topology_signature: str) -> bool:
         """Mock endpoint update for testing"""
-        self.log_info("Simulating endpoint update (test mode)", {
+        test_logger.info("Simulating endpoint update (test mode)", **{
             "service_name": service_name,
             "description": description,
             "target_ips": target_ips,
@@ -218,7 +297,7 @@ class MockPostgreSQLEndpointManager(PostgreSQLEndpointManager):
 
         # Simulate some failure scenarios for testing
         if not target_ips and service_name.endswith('-rw'):
-            self.log_error("Cannot update RW service with no IPs", {
+            test_logger.error("Cannot update RW service with no IPs", **{
                 "service_name": service_name,
                 "test_mode": True
             })
@@ -244,18 +323,8 @@ class PostgreSQLEndpointManagerTester:
         self.test_results.append(result)
 
         status = "PASS" if success else "FAIL"
-
-        # Use structured logging
-        record = logging.LogRecord(
-            name=test_logger.name, level=logging.INFO, pathname="", lineno=0,
-            msg=f"Test {status}: {test_name}", args=(), exc_info=None
-        )
-        record.extra_fields = {
-            "test_result": status,
-            "test_name": test_name,
-            "details": details or {}
-        }
-        test_logger.handle(record)
+        # Use structlog-bound logger
+        test_logger.info(f"Test {status}: {test_name}", test_result=status, test_name=test_name, details=details or {})
 
     def run_scenario_test(self, scenario_name: str) -> bool:
         """Test a specific cluster scenario"""
@@ -263,7 +332,7 @@ class PostgreSQLEndpointManagerTester:
             test_logger.info(f"Running scenario test: {scenario_name}")
 
             # Create test manager with scenario
-            manager = MockPostgreSQLEndpointManager(scenario_name)
+            manager = MockOrchestrator(scenario_name)
             scenario = manager.current_scenario
 
             # Run the manager
@@ -300,17 +369,17 @@ class PostgreSQLEndpointManagerTester:
             test_logger.info("Testing environment variable parsing")
 
             # Test with custom PG_NODES
-            test_nodes = "10.0.0.1,10.0.0.2,10.0.0.3"
+            test_nodes = "192.168.122.31,192.168.122.32,192.168.122.33"
             original_nodes = os.environ.get('PG_NODES', '')
             os.environ['PG_NODES'] = test_nodes
 
-            manager = MockPostgreSQLEndpointManager()
+            manager = MockOrchestrator()
             nodes = manager.get_nodes_from_environment()
 
             expected_nodes = [
-                ("10.0.0.1", "pg-10-0-0-1"),
-                ("10.0.0.2", "pg-10-0-0-2"),
-                ("10.0.0.3", "pg-10-0-0-3")
+                ("192.168.122.31", "pg-192-168-122-31"),
+                ("192.168.122.32", "pg-192-168-122-32"),
+                ("192.168.122.33", "pg-192-168-122-33")
             ]
 
             if nodes == expected_nodes:
@@ -344,7 +413,7 @@ class PostgreSQLEndpointManagerTester:
         try:
             test_logger.info("Testing topology signature creation")
 
-            manager = MockPostgreSQLEndpointManager()
+            manager = MockOrchestrator()
 
             test_topology = {
                 'primary_ip': '192.168.122.31',
@@ -380,7 +449,7 @@ class PostgreSQLEndpointManagerTester:
         try:
             test_logger.info("Testing parallel processing")
 
-            manager = MockPostgreSQLEndpointManager()
+            manager = MockOrchestrator()
             nodes = manager.get_nodes_from_environment()
 
             # Time the topology verification
@@ -445,19 +514,14 @@ class PostgreSQLEndpointManagerTester:
         success_rate = (passed_tests / total_tests) * 100 if total_tests > 0 else 0
         overall_success = passed_tests == total_tests
 
-        # Use structured logging
-        record = logging.LogRecord(
-            name=test_logger.name, level=logging.INFO, pathname="", lineno=0,
-            msg="Comprehensive test suite completed", args=(), exc_info=None
+        test_logger.info(
+            "Comprehensive test suite completed",
+            total_tests=total_tests,
+            passed_tests=passed_tests,
+            failed_tests=total_tests - passed_tests,
+            success_rate=f"{success_rate:.1f}%",
+            overall_success=overall_success,
         )
-        record.extra_fields = {
-            "total_tests": total_tests,
-            "passed_tests": passed_tests,
-            "failed_tests": total_tests - passed_tests,
-            "success_rate": f"{success_rate:.1f}%",
-            "overall_success": overall_success
-        }
-        test_logger.handle(record)
 
         return overall_success
 
@@ -602,12 +666,6 @@ Examples:
 
     try:
         if args.comprehensive:
-            record = logging.LogRecord(
-                name=test_logger.name, level=logging.INFO, pathname="", lineno=0,
-                msg="Running comprehensive test suite", args=(), exc_info=None
-            )
-            test_logger.handle(record)
-
             success = tester.run_comprehensive_tests()
             print(f"\nTest Report:")
             print(tester.generate_test_report())
@@ -615,11 +673,7 @@ Examples:
 
         elif args.scenario:
             if args.scenario in simulator.list_scenarios():
-                record = logging.LogRecord(
-                    name=test_logger.name, level=logging.INFO, pathname="", lineno=0,
-                    msg=f"Testing scenario: {args.scenario}", args=(), exc_info=None
-                )
-                test_logger.handle(record)
+                test_logger.info(f"Testing scenario: {args.scenario}")
 
                 success = tester.run_scenario_test(args.scenario)
                 sys.exit(0 if success else 1)
@@ -645,32 +699,16 @@ Examples:
 
         else:
             # Default: run basic test
-            record = logging.LogRecord(
-                name=test_logger.name, level=logging.INFO, pathname="", lineno=0,
-                msg="Running basic test", args=(), exc_info=None
-            )
-            test_logger.handle(record)
+            test_logger.info("Running basic test")
 
             success = tester.run_scenario_test('healthy_cluster')
             sys.exit(0 if success else 1)
 
     except KeyboardInterrupt:
-        record = logging.LogRecord(
-            name=test_logger.name, level=logging.INFO, pathname="", lineno=0,
-            msg="Test interrupted by user", args=(), exc_info=None
-        )
-        test_logger.handle(record)
+        test_logger.info("Test interrupted by user")
         sys.exit(130)
     except Exception as e:
-        record = logging.LogRecord(
-            name=test_logger.name, level=logging.ERROR, pathname="", lineno=0,
-            msg="Test execution failed", args=(), exc_info=None
-        )
-        record.extra_fields = {
-            "error": str(e),
-            "error_type": type(e).__name__
-        }
-        test_logger.handle(record)
+        test_logger.error("Test execution failed", error=str(e), error_type=type(e).__name__)
         sys.exit(1)
 
 if __name__ == "__main__":

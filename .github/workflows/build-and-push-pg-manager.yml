@@ -62,6 +62,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile.postgres-endpoint-manager
+          target: builder
           platforms: linux/amd64
           push: false
           load: true
@@ -82,30 +83,33 @@ jobs:
             echo 'PostgreSQL endpoint manager ready!'
           "
 
-          # Test functionality
+          # Test functionality: mount the repository tests and invoke the test harness
           echo 'Testing functionality...'
-          docker run --rm --platform linux/amd64 test-image:latest --test
+          docker run --rm --platform linux/amd64 \
+            -v $GITHUB_WORKSPACE/tests:/app/tests:ro \
+            --entrypoint python3 \
+            test-image:latest /app/tests/test_postgres_endpoint_manager.py --comprehensive
 
-      - name: Build and push multi-platform image
-        if: github.event_name != 'pull_request'
+      - name: Build and push pg-manager image
+        # if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile.postgres-endpoint-manager
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=pg-manager
           cache-to: type=gha,mode=max,scope=pg-manager
 
-      - name: Build multi-platform image (PR - no push)
+      - name: Build pg-manager image (PR - no push)
         if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile.postgres-endpoint-manager
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -119,10 +123,10 @@ jobs:
             echo "${{ steps.meta.outputs.tags }}" | while read tag; do
               echo "  📦 $tag (pushed)"
             done
-            echo "🚀 Multi-platform images pushed to registry"
+            echo "🚀 pg-manager image pushed to registry"
           else
             echo "${{ steps.meta.outputs.tags }}" | while read tag; do
               echo "  📦 $tag (built, not pushed)"
             done
-            echo "🧪 PR build - multi-platform images built but not pushed"
+            echo "🧪 PR build - amd64 image built but not pushed"
           fi
