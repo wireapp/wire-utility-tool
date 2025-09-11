@@ -18,13 +18,13 @@ Definitions
 
 Why this split
 - Keeps the runtime image minimal (fast pulls, smaller attack surface, predictable startup) while enabling comprehensive CI tests using a fuller environment.
-- Tests run from the test image and mount repository `scripts/` (so test code / fixtures are not baked into the runtime image).
+- Tests run from the test image and mount repository `tests/` (so test code / fixtures are not baked into the runtime image).
 
 CI workflow (what it does, precisely)
 1. Build test image (single platform) from the builder stage:
    - docker/build-push-action builds with `target: builder`, tag `test-image:latest` (not pushed).
 2. Run tests inside test image:
-   - The workflow mounts repository `scripts/` into `/app/scripts` and invokes the test harness with Python:
+   - The workflow mounts repository `tests/` into `/app/tests` and invokes the test harness with Python:
      - python3 /app/tests/test_postgres_endpoint_manager.py --comprehensive
 3. If tests pass and this is not a PR, build and push the multi-platform final runtime image (no --target).
    - The final image is what gets tagged/pushed to the registry.
@@ -45,7 +45,7 @@ make build-pg-manager-test
 - Run the comprehensive test harness using the test image (matches CI):
 ```bash
 docker run --rm \
-  -v $(pwd)/scripts:/app/scripts:ro \
+  -v $(pwd)/tests:/app/tests:ro \
   --entrypoint python3 \
   <image>-test:latest /app/tests/test_postgres_endpoint_manager.py --comprehensive
 ```
@@ -62,9 +62,9 @@ Debugging workflows (precise, recommended)
 # start an interactive shell inside the fuller test image
 docker run --rm -it --entrypoint bash <image>-test:latest
 # inside the container you have: psql, curl, jq, bash
-# run the manager script in test mode (script is in /usr/local/bin or mount it):
-python /usr/local/bin/postgres-endpoint-manager.py --test
-# or run the test harness directly (if scripts are mounted):
+# run the manager script using the package module:
+python -m src.postgres_endpoint_manager.cli --test
+# or run the test harness directly (if tests are mounted):
 python /app/tests/test_postgres_endpoint_manager.py --scenario healthy_cluster
 ```
 
@@ -86,15 +86,9 @@ ls -la ./tmp_usr_local
 docker run --rm --entrypoint python <runtime-image>:latest -c "import sys, pkgutil; print(sys.executable); print('\n'.join(sys.path)); print([m.name for m in pkgutil.iter_modules()])"
 ```
 
-Best practices and recommendations (concise)
-- Never rely on shell-based debugging in production image; use the `-test` image for development and CI debugging.
-- Keep tests and test data out of the runtime image. Mount tests in CI/test runs instead of baking them in.
-- If you need to inspect runtime-installed packages, use the docker create + docker cp pattern above.
-- For emergency debugging where you need a shell but want runtime binaries, run a debug container based on the test image and install or mount what you need there.
-
 CI maintainer checklist (quick)
 - Ensure QUAY credentials/secrets are present (unchanged from previous workflow).
-- The workflow builds `test-image:latest` from the builder target and runs tests by mounting `scripts/`.
+- The workflow builds `test-image:latest` from the builder target and runs tests by mounting `tests/`.
 - The final multi-platform build continues to build/push the runtime image only.
 
 If you want more automation

@@ -9,7 +9,7 @@ flowchart LR
     CJ[CronJob / Scheduled Job]
   end
 
-  CJ -->|runs| Script["postgres-endpoint-manager.py"]
+  CJ -->|runs| Script["postgres-endpoint-manager package"]
 
   Script -->|reads| Env["ENV: PG_NODES, RW_SERVICE, RO_SERVICE, PG* settings"]
 
@@ -53,7 +53,7 @@ flowchart LR
 
 ## Notes / Legend
 
-- Script: `scripts/postgres-endpoint-manager.py` run as a CronJob (short-lived process).
+- Script: `src.postgres_endpoint_manager` package run as a CronJob (short-lived process).
 - Node checks:
   - `pg_isready` first, then `psql -c "SELECT pg_is_in_recovery();"` to determine role.
   - Results collected in parallel via `ThreadPoolExecutor`.
@@ -72,10 +72,3 @@ flowchart LR
   - Multiple primaries -> error log + no update.
   - No primary or all nodes down -> error log + no update.
   - Kubernetes client missing or config load failure -> process exits with error.
-
-## Suggested additions
-- Add a unit test for `verify_topology()` to assert behavior when multiple primaries are returned.
-- Add a small Kubernetes Role/RoleBinding to ensure the CronJob service account has `get`, `patch`, `create` rights on `endpoints`.
-- Optional: render this Merlin/mermaid diagram to PNG for documentation site.
-
----
