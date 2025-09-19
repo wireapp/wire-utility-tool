@@ -1,13 +1,12 @@
 # Variables
 REGISTRY ?= sukisuk
 UTILITY_IMAGE ?= $(REGISTRY)/wire-utility-tool
-PG_MANAGER_IMAGE ?= $(REGISTRY)/postgres-endpoint-manager
 TAG ?= latest
 
 # Platform targets
 PLATFORMS = linux/amd64,linux/arm64
 
-.PHONY: help build-utility build-pg-manager build-all push-utility push-pg-manager push-all test-utility test-pg-manager clean setup-buildx
+.PHONY: help build-utility push-utility test-utility clean setup-buildx
 
 # Default target
 help:
@@ -19,19 +18,9 @@ help:
 	@echo "  push-utility        - Push wire-utility-tool image"
 	@echo "  test-utility        - Test wire-utility-tool image"
 	@echo ""
-	@echo "PostgreSQL Endpoint Manager:"
-	@echo "  build-pg-manager       - Build postgres-endpoint-manager image"
-	@echo "  build-pg-manager-multi - Build postgres-endpoint-manager for multiple platforms"
-	@echo "  push-pg-manager        - Push postgres-endpoint-manager image"
-	@echo "  test-pg-manager        - Test postgres-endpoint-manager image"
-	@echo "  test-pg-manager-custom - Test with custom node configuration"
-	@echo "  test-pg-manager-interactive - Run interactive test mode"
-	@echo ""
-	@echo "Combined:"
-	@echo "  build-all     - Build both images"
-	@echo "  push-all      - Push both images"
-	@echo "  test-all      - Test both images"
+	@echo "Utility:"
 	@echo "  clean         - Clean local images"
+	@echo "  setup-buildx  - Setup buildx for multi-platform builds"
 	@echo ""
 	@echo "Variables:"
 	@echo "  REGISTRY      - Registry namespace (default: $(REGISTRY))"
@@ -63,95 +52,12 @@ test-utility:
 	docker run --rm --entrypoint="" $(UTILITY_IMAGE):$(TAG) bash -c "echo 'Testing tools...' && python3 --version && python2 --version && psql --version && cqlsh --version && mc --version && echo 'Testing es command...' && es usages && echo 'Testing PATH...' && which bash && echo 'All tests passed!'"
 
 # ============================================================================
-# PostgreSQL Endpoint Manager Targets
-# ============================================================================
-
-# Build postgres-endpoint-manager for current platform
-build-pg-manager:
-	docker build -f Dockerfile.postgres-endpoint-manager -t $(PG_MANAGER_IMAGE):$(TAG) .
-
-# Build a test image (includes postgresql-client and dev tools) from the builder stage
-build-pg-manager-test:
-	docker build -f Dockerfile.postgres-endpoint-manager -t $(PG_MANAGER_IMAGE)-test:$(TAG) --target builder .
-
-# Build postgres-endpoint-manager for multiple platforms
-build-pg-manager-multi:
-	docker buildx build --platform $(PLATFORMS) -f Dockerfile.postgres-endpoint-manager -t $(PG_MANAGER_IMAGE):$(TAG) .
-
-# Push postgres-endpoint-manager image
-push-pg-manager: build-pg-manager
-	docker push $(PG_MANAGER_IMAGE):$(TAG)
-
-# Push postgres-endpoint-manager multi-platform
-push-pg-manager-multi:
-	docker buildx build --platform $(PLATFORMS) -f Dockerfile.postgres-endpoint-manager -t $(PG_MANAGER_IMAGE):$(TAG) --push .
-
-# Test postgres-endpoint-manager image
-test-pg-manager:
-	@echo "Testing postgres-endpoint-manager image (runtime) and functionality via test image..."
-	# Check minimal runtime image (no psql expected) and verify psycopg import/version
-	# Single-line defensive import to avoid shell quoting/newline issues in Makefile
-	docker run --rm --entrypoint sh $(PG_MANAGER_IMAGE):$(TAG) -c "python --version && (python -c 'import psycopg; print(\"psycopg: present, version=\", getattr(psycopg, \"__version__\", \"unknown\")); print(\"psycopg file:\", getattr(psycopg, \"__file__\", None))' || echo 'psycopg import failed') && echo 'psql:' && curl --version >/dev/null 2>&1 || true || true"
-	@echo "Running functional tests using the fuller test image (includes psql)..."
-	# Build or ensure the test image exists and run the comprehensive test harness from it
-	$(MAKE) build-pg-manager-test
-	@echo "Running comprehensive test suite (test failures are expected with mocked dependencies)..."
-	docker run --rm \
-		-e PG_NODES="192.168.122.31,192.168.122.32,192.168.122.33" \
-		-v $(PWD)/tests:/app/tests \
-		--entrypoint python3 \
-		$(PG_MANAGER_IMAGE)-test:$(TAG) /app/tests/test_postgres_endpoint_manager.py --comprehensive || true
-	@echo "Test suite completed (some test failures are expected with mocked database connections)"
-
-# Test postgres-endpoint-manager with custom nodes
-test-pg-manager-custom:
-	@echo "Testing postgres-endpoint-manager with custom node configuration..."
-	docker run --rm \
-		-e PG_NODES="192.168.122.31,192.168.122.32,192.168.122.33" \
-		-e RW_SERVICE="my-postgres-rw" \
-		-e RO_SERVICE="my-postgres-ro" \
-		-e PGUSER="testuser" \
-		-e PGDATABASE="testdb" \
-		-v $(PWD)/tests:/app/tests \
-		--entrypoint python3 \
-		$(PG_MANAGER_IMAGE):$(TAG) /app/tests/test_postgres_endpoint_manager.py --scenario healthy_cluster
-
-# Test postgres-endpoint-manager interactively
-test-pg-manager-interactive:
-	@echo "Running interactive test mode..."
-	docker run --rm -it \
-		-e PG_NODES="192.168.122.31,192.168.122.32,192.168.122.33" \
-		-v $(PWD)/tests:/app/tests \
-		--entrypoint python3 \
-		$(PG_MANAGER_IMAGE):$(TAG) /app/tests/test_postgres_endpoint_manager.py --interactive
-
-# ============================================================================
-# Combined Targets
-# ============================================================================
-
-# Build both images
-build-all: build-utility build-pg-manager
-
-# Build both images for multiple platforms
-build-all-multi: build-utility-multi build-pg-manager-multi
-
-# Push both images
-push-all: push-utility push-pg-manager
-
-# Push both images multi-platform
-push-all-multi: push-utility-multi push-pg-manager-multi
-
-# Test both images
-test-all: test-utility test-pg-manager
-
-# ============================================================================
 # Utility Targets
 # ============================================================================
 
 # Clean local images
 clean:
 	docker rmi $(UTILITY_IMAGE):$(TAG) || true
-	docker rmi $(PG_MANAGER_IMAGE):$(TAG) || true
 	@echo "Cleaned local images"
 
 # Setup buildx for multi-platform builds
@@ -177,15 +83,6 @@ login:
 dev-utility: build-utility test-utility
 	@echo "Development build complete for wire-utility-tool"
 
-dev-pg-manager: build-pg-manager test-pg-manager
-	@echo "Development build complete for postgres-endpoint-manager"
-
 # Quick release workflow (build + test + push)
 release-utility: build-utility test-utility push-utility
 	@echo "Released $(UTILITY_IMAGE):$(TAG)"
-
-release-pg-manager: build-pg-manager test-pg-manager push-pg-manager
-	@echo "Released $(PG_MANAGER_IMAGE):$(TAG)"
-
-release-all: build-all test-all push-all
-	@echo "Released both images with tag $(TAG)"

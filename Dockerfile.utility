@@ -32,6 +32,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     util-linux \
     postgresql-client \
     redis-tools \
+    openjdk-11-jre-headless \
+    procps \
  && curl https://bootstrap.pypa.io/pip/2.7/get-pip.py -o get-pip.py \
  && python2 get-pip.py \
  && rm get-pip.py \
@@ -44,6 +46,10 @@ RUN mkdir -p /opt/cassandra && \
     wget https://archive.apache.org/dist/cassandra/3.11.16/apache-cassandra-3.11.16-bin.tar.gz && \
     tar -xzf apache-cassandra-3.11.16-bin.tar.gz && \
     rm apache-cassandra-3.11.16-bin.tar.gz
+
+# Create nodetool symlink and set CASSANDRA_HOME
+RUN ln -s /opt/cassandra/apache-cassandra-3.11.16/bin/nodetool /usr/local/bin/nodetool && \
+    echo 'export CASSANDRA_HOME=/opt/cassandra/apache-cassandra-3.11.16' >> /etc/bash.bashrc
 
 # Create wrapper that adds PYTHONPATH and calls correct cqlsh script using python2
 RUN printf '#!/bin/bash\nexport PYTHONPATH="/opt/cassandra/apache-cassandra-3.11.16/pylib:$PYTHONPATH"\nexec python2 /opt/cassandra/apache-cassandra-3.11.16/bin/cqlsh.py "$@"\n' > /usr/local/bin/cqlsh && \
