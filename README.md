@@ -25,7 +25,7 @@ A debugging container with comprehensive tooling:
 - **MinIO Client** (`mc`) - Interact with S3-compatible storage
 
 **Network & System Tools**
-- **Network**: `curl`, `wget`, `nc`, `nmap`, `tcpdump`, `dig`, `ping`, `traceroute`
+- **Network**: `curl`, `wget`, `nc`, `nmap`, `tcpdump`, `dig`, `ping`, `traceroute`, `netstat`
 - **Text Processing**: `jq`, `vim`, `nano`, `less`, `tree`
 - **Programming**: Python 2 & 3 with pip
 - **System Monitoring**: `ps`, `top`, `free`, `uptime`, `vmstat`
