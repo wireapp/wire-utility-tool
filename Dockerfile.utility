@@ -1,12 +1,10 @@
 # Use Debian Bullseye Slim as base image for better legacy support
 FROM --platform=$TARGETPLATFORM debian:bullseye-slim
 
-# Install essential utilities and networking tools, plus python2 and pip2
+# Install essential utilities and networking tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     bash-completion \
-    readline-common \
-    libreadline8 \
     curl \
     ca-certificates \
     wget \
@@ -32,32 +30,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     util-linux \
     postgresql-client \
     redis-tools \
-    openjdk-11-jre-headless \
     procps \
  && curl https://bootstrap.pypa.io/pip/2.7/get-pip.py -o get-pip.py \
  && python2 get-pip.py \
  && rm get-pip.py \
  && rm -rf /var/lib/apt/lists/*
 
- RUN pip3 install cassandra-driver requests
-# Download and install Cassandra 3.11 cqlsh (compatible version)
-RUN mkdir -p /opt/cassandra && \
-    cd /opt/cassandra && \
-    wget https://archive.apache.org/dist/cassandra/3.11.16/apache-cassandra-3.11.16-bin.tar.gz && \
-    tar -xzf apache-cassandra-3.11.16-bin.tar.gz && \
-    rm apache-cassandra-3.11.16-bin.tar.gz
+# Install Python dependencies
+RUN pip3 install cassandra-driver requests
 
-# Create nodetool symlink and set CASSANDRA_HOME
-RUN ln -s /opt/cassandra/apache-cassandra-3.11.16/bin/nodetool /usr/local/bin/nodetool && \
-    echo 'export CASSANDRA_HOME=/opt/cassandra/apache-cassandra-3.11.16' >> /etc/bash.bashrc
+# Download and install Cassandra cqlsh
+RUN mkdir -p /opt/cassandra \
+ && cd /opt/cassandra \
+ && wget https://archive.apache.org/dist/cassandra/3.11.16/apache-cassandra-3.11.16-bin.tar.gz \
+ && tar -xzf apache-cassandra-3.11.16-bin.tar.gz \
+ && rm apache-cassandra-3.11.16-bin.tar.gz
 
-# Create wrapper that adds PYTHONPATH and calls correct cqlsh script using python2
-RUN printf '#!/bin/bash\nexport PYTHONPATH="/opt/cassandra/apache-cassandra-3.11.16/pylib:$PYTHONPATH"\nexec python2 /opt/cassandra/apache-cassandra-3.11.16/bin/cqlsh.py "$@"\n' > /usr/local/bin/cqlsh && \
-    chmod +x /usr/local/bin/cqlsh
-
-# Install RabbitMQ management tool(legacy version, can not use latest rabbitmqadmin-ng due to Python 2 requirement)
-RUN wget -O /usr/local/bin/rabbitmqadmin https://raw.githubusercontent.com/rabbitmq/rabbitmq-server/main/deps/rabbitmq_management/bin/rabbitmqadmin && \
-    chmod +x /usr/local/bin/rabbitmqadmin
+# Create cqlsh wrapper and install additional tools
+RUN printf '#!/bin/bash\nexport PYTHONPATH="/opt/cassandra/apache-cassandra-3.11.16/pylib:$PYTHONPATH"\nexec python2 /opt/cassandra/apache-cassandra-3.11.16/bin/cqlsh.py "$@"\n' > /usr/local/bin/cqlsh \
+ && chmod +x /usr/local/bin/cqlsh \
+ && wget -O /usr/local/bin/rabbitmqadmin https://raw.githubusercontent.com/rabbitmq/rabbitmq-server/main/deps/rabbitmq_management/bin/rabbitmqadmin \
+ && chmod +x /usr/local/bin/rabbitmqadmin
 
 # Install MinIO client for the target architecture
 ARG TARGETARCH
@@ -65,37 +58,24 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
         wget https://dl.min.io/client/mc/release/linux-arm64/mc -O /usr/local/bin/mc; \
     else \
         wget https://dl.min.io/client/mc/release/linux-amd64/mc -O /usr/local/bin/mc; \
-    fi && \
-    chmod +x /usr/local/bin/mc
+    fi \
+ && chmod +x /usr/local/bin/mc
 
-# Copy entrypoint script
-COPY scripts/entrypoint.py /usr/local/bin/entrypoint.py
-RUN chmod +x /usr/local/bin/entrypoint.py
-
-# Copy Elasticsearch debug script
-COPY scripts/es-debug.py /usr/local/bin/es-debug.py
-RUN chmod +x /usr/local/bin/es-debug.py
-
-# Create es symlink for easier access
-RUN ln -s /usr/local/bin/es-debug.py /usr/local/bin/es
-
-# Create status symlink (will point to script created by entrypoint)
-RUN ln -s /tmp/status.sh /usr/local/bin/status
+# Copy and setup scripts
+COPY scripts/entrypoint.py scripts/es-debug.py /usr/local/bin/
+RUN chmod +x /usr/local/bin/entrypoint.py /usr/local/bin/es-debug.py \
+ && ln -s /usr/local/bin/es-debug.py /usr/local/bin/es \
+ && ln -s /tmp/status.sh /usr/local/bin/status
 
 # Create non-root user
 RUN adduser --disabled-password --gecos "" --uid 65532 nonroot
 
-# Switch to non-root user
+# Switch to non-root user and set environment
 USER nonroot
-
-# Set environment variables for convenience
 ENV HOME=/home/nonroot \
     SHELL=/bin/bash \
     TERM=xterm-256color \
     PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
-
-
-# Set working directory
 WORKDIR /home/nonroot
 
 # Use Python entrypoint

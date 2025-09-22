@@ -19,7 +19,6 @@ A debugging container with comprehensive tooling:
 - **PostgreSQL** (`psql`) - Connect and query PostgreSQL databases
 - **Redis** (`redis-cli`) - Interact with Redis instances
 - **Cassandra** (`cqlsh`) - Query Cassandra clusters (v3.11 compatible)
-- **Cassandra Admin** (`nodetool`) - Cluster administration and monitoring*
 
 **Message Queue & Storage**
 - **RabbitMQ** (`rabbitmqadmin`) - Manage RabbitMQ instances
@@ -28,7 +27,8 @@ A debugging container with comprehensive tooling:
 **Network & System Tools**
 - **Network**: `curl`, `wget`, `nc`, `nmap`, `tcpdump`, `dig`, `ping`, `traceroute`
 - **Text Processing**: `jq`, `vim`, `nano`, `less`, `tree`
-- **Programming**: Python 2 & 3 with pip, Java 11
+- **Programming**: Python 2 & 3 with pip
+- **System Monitoring**: `ps`, `top`, `free`, `uptime`, `vmstat`
 
 **Search & Analytics**
 - **Elasticsearch Debug** (`es`) - Debug Elasticsearch clusters
@@ -67,7 +67,6 @@ status                    # Show service connectivity status
 # Database tools
 psql                      # PostgreSQL client
 cqlsh                     # Cassandra CQL shell
-nodetool status           # Cassandra cluster status
 redis-cli                 # Redis client
 
 # Message queue
@@ -90,7 +89,7 @@ es usages                 # Show all available commands
 1. **Make changes and test locally**
 2. **Create version tag**:
    ```bash
-   git tag -a v1.3.0 -m "Add nodetool support and Java runtime"
+   git tag -a v1.3.0 -m "Add .."
    ```
 3. **Push to trigger automated build**:
    ```bash
@@ -108,7 +107,7 @@ es usages                 # Show all available commands
 - **Multi-platform**: AMD64 & ARM64 support
 - **Security**: Non-root user (UID 65532), minimal attack surface
 - **Base**: Debian Bullseye Slim for stability
-- **Java Runtime**: OpenJDK 11 for Cassandra administration tools
+- **Python**: Python 2.7 & 3.x with essential libraries
 
 ## 🤝 Contributing
 
@@ -120,5 +119,3 @@ es usages                 # Show all available commands
 ---
 
 **Repository Purpose**: Provides standardized debugging utilities for Wire's infrastructure operations.
-
-\* *Note: nodetool may have JVM compatibility issues with OpenJDK. For full functionality, consider using Oracle JDK in production environments.*
